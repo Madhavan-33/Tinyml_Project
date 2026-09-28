@@ -1,0 +1,20 @@
+# Renode Emulation Script for STM32 Microcontroller
+mach create "TinyML_Anomaly_Detector"
+
+# Load STM32F4 Discovery Kit platform
+machine LoadPlatformDescription @platforms/boards/stm32f4_discovery-kit.repl
+
+# Create TCP Server Socket Terminal on Port 12345 for PySerial / Streamlit integration
+emulation CreateServerSocketTerminal 12345 "external_uart"
+sysbus.usart1 Connect external_uart
+
+# Load compiled MCU binary (compile main_tflm.cpp to produce firmware.elf)
+sysbus LoadELF @$ORIGIN/firmware.elf
+
+
+# Show terminal window for USART1 serial output
+showAnalyzer sysbus.usart1
+
+# Start execution
+start
+

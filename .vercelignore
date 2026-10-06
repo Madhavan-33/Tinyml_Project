@@ -1,0 +1,26 @@
+# Vercel Deployment Ignore List
+# Keeps the serverless function bundle under 1MB
+
+# Heavy data workbooks and PDFs
+*.xlsx
+*.pdf
+*.zip
+*.resc
+
+# Streamlit and training scripts (deployed on Render, not needed on Vercel)
+streamlit_updated_app.py
+streamlit_updated_train.py
+train_headless.py
+dataset_generator.py
+renode_serial_emulator.py
+export_weights_for_vercel.py
+mcu_exporter.py
+
+# Data files
+*.csv
+
+# Cache & environments
+__pycache__/
+.env
+.streamlit/
+.git/

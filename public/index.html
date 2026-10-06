@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>9-Sensor Mesh TinyML Object & Size Predictor | Vercel Deployment</title>
+  <meta name="description" content="High-performance TinyML object shape classification and size regression powered by 9-sensor mesh telemetry and Vercel serverless functions.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
+</head>
+<body>
+
+  <!-- Top Navigation Bar -->
+  <header class="top-nav">
+    <div class="brand-section">
+      <div class="brand-icon">⚡</div>
+      <div class="brand-title">
+        <h1>9-Sensor Mesh Object & Size Analytics Lab</h1>
+        <div class="brand-subtitle">
+          <span>Dual-Head TinyML Neural Network</span>
+          <span class="status-badge">Vercel Edge Ready</span>
+        </div>
+      </div>
+    </div>
+    <nav class="nav-actions" aria-label="Main Navigation">
+      <a href="/api/predict" target="_blank" rel="noopener noreferrer" class="pill-link" id="navApiDoc">
+        <span>🔌</span> REST API Endpoint
+      </a>
+      <a href="https://github.com/Madhavan-33/Tinyml_Project" target="_blank" rel="noopener noreferrer" class="pill-link" id="navGitHub">
+        <span>📂</span> GitHub Source
+      </a>
+    </nav>
+  </header>
+
+  <!-- Main Application Workspace -->
+  <main class="main-wrapper">
+    
+    <!-- Left Column: 9-Sensor Mesh Input Controls -->
+    <aside class="glass-panel" aria-labelledby="controlsHeading">
+      <div class="panel-header">
+        <h2 id="controlsHeading">🎛️ 9-Sensor Mesh Telemetry</h2>
+        <button id="btnRandomize" class="preset-chip" title="Generate Random Sensor Telemetry">🎲 Noise Sim</button>
+      </div>
+
+      <!-- Quick Preset Buttons -->
+      <div class="presets-bar" role="group" aria-label="Sensor Presets">
+        <button type="button" class="preset-chip" data-preset="beam" id="presetBeam">Beam Profile</button>
+        <button type="button" class="preset-chip" data-preset="cylinder" id="presetCylinder">Cylinder Profile</button>
+        <button type="button" class="preset-chip" data-preset="sphere" id="presetSphere">Sphere Profile</button>
+        <button type="button" class="preset-chip" data-preset="anomaly" id="presetAnomaly">Edge Anomaly</button>
+      </div>
+
+      <!-- 9 Dynamic Sliders List -->
+      <div class="sensor-sliders-list" id="sensorSlidersList">
+        <!-- Rendered dynamically by app.js -->
+      </div>
+    </aside>
+
+    <!-- Right Column: Model Output, Waveform, and Analytics -->
+    <section class="glass-panel" aria-labelledby="analyticsHeading">
+      <div class="panel-header">
+        <h2 id="analyticsHeading">🎯 Predicted Object & Size Output</h2>
+        <span class="status-badge" id="resLatency">&lt; 5 ms Latency</span>
+      </div>
+
+      <!-- KPI Highlight Cards -->
+      <div class="kpi-grid">
+        <div class="kpi-card kpi-shape" id="cardShape">
+          <div class="kpi-label">Identified Object</div>
+          <div class="kpi-value" id="resShape">BEAM</div>
+          <div class="kpi-subtext" id="resConfidence">Confidence: 94.8%</div>
+        </div>
+
+        <div class="kpi-card kpi-size" id="cardSize">
+          <div class="kpi-label">Estimated Dimension</div>
+          <div class="kpi-value" id="resSize">24.11 mm</div>
+          <div class="kpi-subtext">Continuous Sizing (dim_mm)</div>
+        </div>
+      </div>
+
+      <!-- Real-time 9-Sensor Waveform Canvas -->
+      <div class="viz-box">
+        <div class="viz-header">
+          <span class="viz-title">📈 9-Sensor Spatial Amplitude Waveform</span>
+          <span style="font-size:0.75rem; color:var(--text-faint); font-family:var(--font-mono);">S1 ➔ S9 Channel Matrix</span>
+        </div>
+        <canvas id="sensorWaveCanvas" height="140" aria-label="Sensor amplitude waveform plot"></canvas>
+      </div>
+
+      <!-- Probability Distribution Breakdown -->
+      <div class="prob-section">
+        <div class="viz-header">
+          <span class="viz-title">📊 Shape Classification Softmax Distribution</span>
+        </div>
+
+        <div class="prob-row">
+          <div class="prob-labels">
+            <span>Beam (Linear Bar)</span>
+            <span id="pctBeam" style="font-family:var(--font-mono); font-weight:600;">94.8%</span>
+          </div>
+          <div class="prob-bar-container">
+            <div class="prob-bar-fill bar-beam" id="barBeam" style="width: 94.8%;"></div>
+          </div>
+        </div>
+
+        <div class="prob-row">
+          <div class="prob-labels">
+            <span>Cylinder (Radial Profile)</span>
+            <span id="pctCylinder" style="font-family:var(--font-mono); font-weight:600;">3.1%</span>
+          </div>
+          <div class="prob-bar-container">
+            <div class="prob-bar-fill bar-cylinder" id="barCylinder" style="width: 3.1%;"></div>
+          </div>
+        </div>
+
+        <div class="prob-row">
+          <div class="prob-labels">
+            <span>Sphere (Curvature)</span>
+            <span id="pctSphere" style="font-family:var(--font-mono); font-weight:600;">2.1%</span>
+          </div>
+          <div class="prob-bar-container">
+            <div class="prob-bar-fill bar-sphere" id="barSphere" style="width: 2.1%;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Developer API Tester Section -->
+      <div class="api-box">
+        <div class="api-top">
+          <span class="viz-title">⚡ Vercel Serverless Function Tester (/api/predict)</span>
+          <button class="btn-trigger-api" id="btnTriggerApi">🚀 Send POST Request to /api/predict</button>
+        </div>
+        
+        <p style="font-size:0.75rem; color:var(--text-muted); margin-bottom:0.6rem;">
+          Trigger the live serverless API endpoint with the current 9-sensor telemetry values:
+        </p>
+
+        <pre class="code-block" id="apiCurlCode">curl -X POST https://your-deployment.vercel.app/api/predict \
+  -H "Content-Type: application/json" \
+  -d '{"sensors":[1.19,4.47,1.98,2.90,5.30,3.68,4.47,6.14,5.42]}'</pre>
+
+        <div style="margin-top:0.75rem;">
+          <div style="font-size:0.75rem; color:var(--text-faint); margin-bottom:0.35rem; font-family:var(--font-mono);">
+            Serverless Response Telemetry:
+          </div>
+          <pre class="code-block" id="apiResponseCode">// Click "Send POST Request" or move sliders to inspect live API output.</pre>
+        </div>
+      </div>
+
+    </section>
+  </main>
+
+  <!-- Footer -->
+  <footer>
+    <p>TinyML Dual-Head Model Architecture: 9 Sensors (S1-S9) ➔ Object Shape + Sizing Regression</p>
+    <p style="margin-top:0.35rem;">Optimized for Vercel Serverless Edge &amp; Microcontroller TinyML Firmware (STM32 / Cortex-M)</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

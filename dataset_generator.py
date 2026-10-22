@@ -4,7 +4,7 @@ import numpy as np
 def generate_sensor_design_dataset(filename="sensor_design_dataset.csv", num_samples=2500):
     """
     Generates a physically-grounded 9-sensor tactile mesh dataset for TinyML indenter
-    shape classification ('Beam', 'Cylinder', 'Sphere') and dimension sizing ('dim_mm').
+    shape classification ('cube', 'cylinder') and dimension sizing ('dim_mm').
     
     The 9 sensors are arranged in a 3x3 planar tactile grid:
         Row 0: S1 (r=-1, c=-1), S2 (r=-1, c=0), S3 (r=-1, c=1)
@@ -12,11 +12,12 @@ def generate_sensor_design_dataset(filename="sensor_design_dataset.csv", num_sam
         Row 2: S7 (r=1,  c=-1), S8 (r=1,  c=0), S9 (r=1,  c=1)
         
     Sensor operating voltage range: 1.50V to 2.30V (typical mesh telemetry baseline: ~1.55V, max: ~2.28V).
+    Uses 'cube' and 'cylinder' labels to match the real sensor dataset.
     """
     np.random.seed(42)
     
     materials = ['Silicone', 'TPU', 'Rubber']
-    shapes = ['Beam', 'Cylinder', 'Sphere']
+    shapes = ['cube', 'cylinder']
     
     mat_factors = {'Silicone': 1.15, 'TPU': 1.0, 'Rubber': 0.88}
     
@@ -36,17 +37,13 @@ def generate_sensor_design_dataset(filename="sensor_design_dataset.csv", num_sam
         # Indenter contact spread radius scales with object dimension
         spread = 0.6 + 1.6 * ((dim_mm - 10.0) / 50.0)
         
-        # 1. Sphere: Hertzian point contact centered at S5 (r=0, c=0) with radial Gaussian roll-off
-        sphere_pattern = np.exp(- (dist_center / spread)**2)
+        # 1. Cube: Flat uniform contact across the 3x3 mesh (block-like press)
+        cube_pattern = 0.40 + 0.60 * np.exp(- (dist_center / (spread * 1.3))**2)
         
         # 2. Cylinder: Linear axial contact ridge along central column c=0 (S2, S5, S8)
         cyl_pattern = np.exp(- (abs(c) / spread)**2) * (0.85 + 0.15 * (1.0 - abs(r)))
         
-        # 3. Beam: Flat rectangular punch contact across rows with perimeter/edge stress
-        beam_pattern = 0.35 + 0.65 * np.exp(- (abs(r) / spread)**2)
-        
-        pattern = np.where(selected_shape == 'Sphere', sphere_pattern,
-                  np.where(selected_shape == 'Cylinder', cyl_pattern, beam_pattern))
+        pattern = np.where(selected_shape == 'cylinder', cyl_pattern, cube_pattern)
                   
         m_fac = np.array([mat_factors[m] for m in selected_mat])
         load_factor = (pressure / 200.0) * m_fac

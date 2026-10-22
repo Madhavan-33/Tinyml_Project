@@ -1,0 +1,17 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment and secrets
+.env
+.venv/
+venv/
+ENV/
+
+# Streamlit runtime
+.streamlit/secrets.toml
+
+# OS artifacts
+.DS_Store
+Thumbs.db

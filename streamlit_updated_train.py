@@ -152,8 +152,11 @@ if len(cols_s) < 9:
     cols_s = numeric_cols[:9]
 
 # Detect Shape and Dimension columns
-shape_col = 'object_shape' if 'object_shape' in df_raw.columns else next((c for c in df_raw.columns if 'shape' in c.lower()), df_raw.columns[1])
-dim_col = 'dim_mm' if 'dim_mm' in df_raw.columns else next((c for c in df_raw.columns if 'dim' in c.lower() or 'size' in c.lower()), df_raw.columns[2])
+candidate_shape_cols = [c for c in df_raw.columns if any(k in c.lower() for k in ['shape', 'object_shape', 'object', 'class', 'geometry'])]
+shape_col = candidate_shape_cols[0] if candidate_shape_cols else df_raw.columns[1]
+
+candidate_dim_cols = [c for c in df_raw.columns if any(k in c.lower() for k in ['dim_mm', 'dim', 'dimension', 'size_mm', 'size'])]
+dim_col = candidate_dim_cols[0] if candidate_dim_cols else df_raw.columns[2]
 
 with col_d2:
     st.markdown("#### 🎯 Filter & Reduce Data-Size Options")
@@ -298,11 +301,11 @@ if train_clicked:
     with st.spinner("Training Dual-Task Deep Neural Network on 9 Sensor Inputs..."):
         # Build Dual-Head Keras Model
         inputs = layers.Input(shape=(9,), name='sensor_inputs')
-        x = layers.Dense(64, activation='relu')(inputs)
-        x = layers.BatchNormalization()(x)
-        x = layers.Dropout(0.1)(x)
-        x = layers.Dense(64, activation='relu')(x)
-        x = layers.Dense(32, activation='relu')(x)
+        x = layers.Dense(64, activation='relu', name='dense_1')(inputs)
+        x = layers.BatchNormalization(name='bn_1')(x)
+        x = layers.Dropout(0.05)(x)
+        x = layers.Dense(64, activation='relu', name='dense_2')(x)
+        x = layers.Dense(32, activation='relu', name='dense_3')(x)
 
         shape_out = layers.Dense(num_classes, activation='softmax', name='shape_output')(x)
         dim_out = layers.Dense(1, activation='linear', name='dim_output')(x)
@@ -311,7 +314,7 @@ if train_clicked:
         training_model.compile(
             optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
             loss={'shape_output': 'sparse_categorical_crossentropy', 'dim_output': 'mse'},
-            loss_weights={'shape_output': 1.0, 'dim_output': 0.05},
+            loss_weights={'shape_output': 1.0, 'dim_output': 0.01},
             metrics={'shape_output': ['accuracy'], 'dim_output': ['mae']}
         )
 
@@ -375,6 +378,62 @@ if train_clicked:
         try:
             from convert_model import convert_tflite_to_c_header
             convert_tflite_to_c_header("anomaly_model.tflite", "model_data.h")
+        except Exception:
+            pass
+
+        # Export JSON weights for Vercel and JS
+        try:
+            import json
+            d1 = training_model.get_layer('dense_1')
+            bn = training_model.get_layer('bn_1')
+            d2 = training_model.get_layer('dense_2')
+            d3 = training_model.get_layer('dense_3')
+            hs = training_model.get_layer('shape_output')
+            hd = training_model.get_layer('dim_output')
+
+            w1, b1 = d1.get_weights()
+            gamma, beta, mean, var = bn.get_weights()
+            eps = float(bn.epsilon)
+
+            w2, b2 = d2.get_weights()
+            w3, b3 = d3.get_weights()
+            w_shape, b_shape = hs.get_weights()
+            w_dim, b_dim = hd.get_weights()
+
+            vercel_model = {
+                "metadata": {
+                    "num_inputs": 9,
+                    "shape_classes": list(shape_encoder.classes_),
+                    "sensor_means": [float(m) for m in scaler_sensors.mean_],
+                    "sensor_stds": [float(s) for s in np.sqrt(scaler_sensors.var_)],
+                    "accuracy": float(acc),
+                    "dim_mae": float(mae),
+                    "dim_rmse": float(rmse),
+                    "dim_r2": float(r2)
+                },
+                "weights": {
+                    "w1": w1.tolist(),
+                    "b1": b1.tolist(),
+                    "bn_gamma": gamma.tolist(),
+                    "bn_beta": beta.tolist(),
+                    "bn_mean": mean.tolist(),
+                    "bn_var": var.tolist(),
+                    "bn_eps": float(eps),
+                    "w2": w2.tolist(),
+                    "b2": b2.tolist(),
+                    "w3": w3.tolist(),
+                    "b3": b3.tolist(),
+                    "w_shape": w_shape.tolist(),
+                    "b_shape": b_shape.tolist(),
+                    "w_dim": w_dim.tolist(),
+                    "b_dim": b_dim.tolist()
+                }
+            }
+            os.makedirs("api", exist_ok=True)
+            os.makedirs("public", exist_ok=True)
+            for target in ["model_weights.json", "api/model_weights.json", "public/model_weights.json"]:
+                with open(target, "w") as f:
+                    json.dump(vercel_model, f)
         except Exception:
             pass
 
@@ -446,7 +505,7 @@ if train_clicked:
         results_df = df_train_clean.copy()
         results_df['Actual_Object'] = df_train_clean[shape_col]
         results_df['Predicted_Object'] = pred_shape_names
-        results_df['Shape_Match'] = ["✅ MATCH" if a == p else "❌ MISMATCH" for a, p in zip(results_df['Actual_Object'], results_df['Predicted_Object'])]
+        results_df['Shape_Match'] = ["✅ MATCH" if str(a).strip().lower() == str(p).strip().lower() else "❌ MISMATCH" for a, p in zip(results_df['Actual_Object'], results_df['Predicted_Object'])]
         results_df['Shape_Confidence_%'] = np.round(pred_confidences, 1)
         results_df['Actual_Size_mm'] = np.round(y_dim, 2)
         results_df['Predicted_Size_mm'] = np.round(pred_dims, 2)

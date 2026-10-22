@@ -52,17 +52,23 @@ def export_weights():
     shape_out = layers.Dense(num_classes, activation='softmax', name='shape_output')(x)
     dim_out = layers.Dense(1, activation='linear', name='dim_output')(x)
 
+    try:
+        import sys
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
     training_model = models.Model(inputs=inputs, outputs=[shape_out, dim_out])
     training_model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=0.002),
+        optimizer=tf.keras.optimizers.Adam(learning_rate=0.003),
         loss={'shape_output': 'sparse_categorical_crossentropy', 'dim_output': 'mse'},
-        loss_weights={'shape_output': 1.0, 'dim_output': 0.05}
+        loss_weights={'shape_output': 1.0, 'dim_output': 0.01}
     )
 
     training_model.fit(
         X_scaled, [y_shape, y_dim],
         validation_split=0.15,
-        epochs=45,
+        epochs=60,
         batch_size=32,
         verbose=0
     )

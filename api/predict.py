@@ -36,6 +36,13 @@ def get_model_data():
 def run_inference(sensors):
     """
     Executes forward pass using NumPy (or pure python fallback if numpy missing).
+    Supports both:
+      - Original single-BN architecture (dense1 -> bn1 -> dense2 -> dense3 -> heads)
+      - Retrained dual-BN architecture (dense1 -> bn1 -> dense2 -> bn2 -> dense3 -> heads)
+
+    Feature scaling: StandardScaler (z-score) is applied first using the sensor_means
+    and sensor_stds stored in the model weights metadata. This ensures the model
+    receives properly normalized input even for out-of-distribution raw values.
     """
     model = get_model_data()
     meta = model["metadata"]
@@ -51,6 +58,7 @@ def run_inference(sensors):
         x = np.array(sensors, dtype=np.float32)
         m = np.array(means, dtype=np.float32)
         s = np.array(stds, dtype=np.float32)
+        # StandardScaler z-score normalization (MUST match training scaler)
         x_scaled = (x - m) / s
 
         w1 = np.array(weights["w1"], dtype=np.float32)
@@ -70,39 +78,66 @@ def run_inference(sensors):
         w_dim = np.array(weights["w_dim"], dtype=np.float32)
         b_dim = np.array(weights["b_dim"], dtype=np.float32)
 
-        # Forward pass
+        # Forward pass: Layer 1
         h1 = np.maximum(0, np.dot(x_scaled, w1) + b1)
         bn1 = gamma * (h1 - bn_mean) / np.sqrt(bn_var + bn_eps) + beta
-        h2 = np.maximum(0, np.dot(bn1, w2) + b2)
+
+        # Forward pass: Layer 2
+        h2_pre = np.maximum(0, np.dot(bn1, w2) + b2)
+
+        # Optional second BN layer (retrained model with dual-BN architecture)
+        if "bn2_gamma" in weights:
+            gamma2 = np.array(weights["bn2_gamma"], dtype=np.float32)
+            beta2 = np.array(weights["bn2_beta"], dtype=np.float32)
+            mean2 = np.array(weights["bn2_mean"], dtype=np.float32)
+            var2 = np.array(weights["bn2_var"], dtype=np.float32)
+            eps2 = float(weights["bn2_eps"])
+            h2 = gamma2 * (h2_pre - mean2) / np.sqrt(var2 + eps2) + beta2
+        else:
+            h2 = h2_pre
+
+        # Forward pass: Layer 3
         h3 = np.maximum(0, np.dot(h2, w3) + b3)
 
+        # Shape head (Softmax)
         logits = np.dot(h3, w_shape) + b_shape
         e = np.exp(logits - np.max(logits))
         probs = (e / np.sum(e)).tolist()
+
+        # Dimension head (Linear)
         dim_mm = float(np.dot(h3, w_dim)[0] + b_dim[0])
 
     except ImportError:
         # Pure Python fallback
         import math
         x_scaled = [(sensors[i] - means[i]) / stds[i] for i in range(9)]
-        
-        # Dense 1
+
+        # Dense 1 + BN1
         h1 = []
         for j in range(len(weights["b1"])):
             val = sum(x_scaled[i] * weights["w1"][i][j] for i in range(9)) + weights["b1"][j]
             h1.append(max(0.0, val))
 
-        # BatchNorm
         bn1 = []
         for j in range(len(h1)):
             v = weights["bn_gamma"][j] * (h1[j] - weights["bn_mean"][j]) / math.sqrt(weights["bn_var"][j] + weights["bn_eps"]) + weights["bn_beta"][j]
             bn1.append(v)
 
         # Dense 2
-        h2 = []
+        h2_pre = []
         for j in range(len(weights["b2"])):
             val = sum(bn1[i] * weights["w2"][i][j] for i in range(len(bn1))) + weights["b2"][j]
-            h2.append(max(0.0, val))
+            h2_pre.append(max(0.0, val))
+
+        # Optional BN2
+        if "bn2_gamma" in weights:
+            h2 = []
+            for j in range(len(h2_pre)):
+                eps2 = weights["bn2_eps"]
+                v = weights["bn2_gamma"][j] * (h2_pre[j] - weights["bn2_mean"][j]) / math.sqrt(weights["bn2_var"][j] + eps2) + weights["bn2_beta"][j]
+                h2.append(v)
+        else:
+            h2 = h2_pre
 
         # Dense 3
         h3 = []
@@ -110,7 +145,7 @@ def run_inference(sensors):
             val = sum(h2[i] * weights["w3"][i][j] for i in range(len(h2))) + weights["b3"][j]
             h3.append(max(0.0, val))
 
-        # Shape Head (Softmax)
+        # Shape head
         logits = []
         for j in range(len(weights["b_shape"])):
             val = sum(h3[i] * weights["w_shape"][i][j] for i in range(len(h3))) + weights["b_shape"][j]
@@ -120,7 +155,7 @@ def run_inference(sensors):
         sum_exp = sum(exp_l)
         probs = [e / sum_exp for e in exp_l]
 
-        # Dim Head (Linear)
+        # Dim head
         dim_mm = sum(h3[i] * weights["w_dim"][i][0] for i in range(len(h3))) + weights["b_dim"][0]
 
     best_idx = max(range(len(probs)), key=lambda i: probs[i])
@@ -200,9 +235,9 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(result).encode("utf-8"))
             return
 
-        # Default info endpoint
+        # Default info endpoint (uses realistic in-range sensor values)
         model_data = get_model_data()
-        sample_request = {"sensors": [1.19, 4.47, 1.98, 2.90, 5.30, 3.68, 4.47, 6.14, 5.42]}
+        sample_request = {"sensors": [2.25, 2.20, 2.22, 2.19, 2.23, 2.21, 2.17, 2.24, 2.20]}
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self._send_cors_headers()

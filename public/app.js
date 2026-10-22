@@ -2,15 +2,20 @@
 let modelData = null;
 const NUM_SENSORS = 9;
 
-// Default initial telemetry
-let sensorValues = [1.19, 4.47, 1.98, 2.90, 5.30, 3.68, 4.47, 6.14, 5.42];
+// Physical sensor operating range for the actual mesh telemetry system
+const SENSOR_MIN = 1.5;    // V
+const SENSOR_MAX = 2.3;    // V
+const SENSOR_DEFAULT = 2.25; // V (dataset mean)
 
-// Preset Scenarios
+// Default initial telemetry (realistic in-range values)
+let sensorValues = [2.25, 2.20, 2.22, 2.18, 2.27, 2.21, 2.23, 2.19, 2.24];
+
+// Preset Scenarios (in-range: 1.5V - 2.3V)
 const PRESETS = {
-  beam: [1.19, 4.47, 1.98, 2.90, 5.30, 3.68, 4.47, 6.14, 5.42],
-  cylinder: [2.34, 3.42, 1.66, 3.74, 4.66, 3.50, 4.95, 5.82, 5.40],
-  sphere: [4.50, 4.20, 5.10, 5.80, 5.50, 6.20, 6.80, 7.10, 7.50],
-  anomaly: [0.10, 0.20, 0.05, 9.80, 9.90, 0.15, 0.30, 8.90, 9.50]
+  beam:     [2.10, 2.05, 2.08, 2.15, 2.12, 2.09, 2.11, 2.07, 2.13],
+  cylinder: [2.20, 2.18, 2.22, 2.19, 2.23, 2.21, 2.17, 2.24, 2.20],
+  sphere:   [2.28, 2.25, 2.27, 2.29, 2.26, 2.28, 2.30, 2.27, 2.29],
+  anomaly:  [1.52, 1.55, 1.51, 2.28, 2.29, 1.53, 1.57, 2.27, 2.28]
 };
 
 // Initialize Application
@@ -42,7 +47,8 @@ function renderSliderControls() {
   container.innerHTML = "";
 
   for (let i = 1; i <= NUM_SENSORS; i++) {
-    const val = sensorValues[i - 1];
+    const val = Math.min(SENSOR_MAX, Math.max(SENSOR_MIN, sensorValues[i - 1]));
+    sensorValues[i - 1] = val; // clamp stored value
     const row = document.createElement("div");
     row.className = "sensor-row";
     row.innerHTML = `
@@ -51,10 +57,11 @@ function renderSliderControls() {
           <span class="sensor-label-badge">S${i}</span> Mesh Sensor ${i}
         </label>
         <input type="number" id="num_s${i}" class="sensor-number-input" 
-               min="0" max="15" step="0.01" value="${val.toFixed(2)}" aria-label="Sensor ${i} Value">
+               min="${SENSOR_MIN}" max="${SENSOR_MAX}" step="0.01" value="${val.toFixed(2)}" aria-label="Sensor ${i} Value">
       </div>
-      <input type="range" id="slider_s${i}" min="0" max="15" step="0.05" value="${val}"
+      <input type="range" id="slider_s${i}" min="${SENSOR_MIN}" max="${SENSOR_MAX}" step="0.01" value="${val}"
              aria-label="Sensor ${i} Range Slider">
+      <div style="font-size:10px;color:#64748b;margin-top:2px">Range: ${SENSOR_MIN}V &ndash; ${SENSOR_MAX}V (physical operating range)</div>
     `;
     container.appendChild(row);
 
@@ -70,7 +77,8 @@ function renderSliderControls() {
 
     numInput.addEventListener("input", (e) => {
       let v = parseFloat(e.target.value);
-      if (isNaN(v)) v = 0;
+      if (isNaN(v)) v = SENSOR_DEFAULT;
+      v = Math.min(SENSOR_MAX, Math.max(SENSOR_MIN, v)); // clamp
       sensorValues[i - 1] = v;
       slider.value = v;
       onSensorDataChanged();
@@ -97,20 +105,18 @@ function evaluatePrediction() {
   const weights = modelData.weights;
   const classes = meta.shape_classes;
 
-  // 1. Normalize
+  // 1. Normalize via StandardScaler (z-score)
   const x_scaled = sensorValues.map((v, i) => (v - meta.sensor_means[i]) / meta.sensor_stds[i]);
 
   // 2. Dense 1 + ReLU
   const h1 = [];
   for (let j = 0; j < weights.b1.length; j++) {
     let sum = weights.b1[j];
-    for (let i = 0; i < 9; i++) {
-      sum += x_scaled[i] * weights.w1[i][j];
-    }
+    for (let i = 0; i < 9; i++) sum += x_scaled[i] * weights.w1[i][j];
     h1.push(Math.max(0, sum));
   }
 
-  // 3. Batch Normalization
+  // 3. BatchNorm 1
   const bn1 = [];
   for (let j = 0; j < h1.length; j++) {
     const std = Math.sqrt(weights.bn_var[j] + weights.bn_eps);
@@ -119,32 +125,37 @@ function evaluatePrediction() {
   }
 
   // 4. Dense 2 + ReLU
-  const h2 = [];
+  const h2_pre = [];
   for (let j = 0; j < weights.b2.length; j++) {
     let sum = weights.b2[j];
-    for (let i = 0; i < bn1.length; i++) {
-      sum += bn1[i] * weights.w2[i][j];
-    }
-    h2.push(Math.max(0, sum));
+    for (let i = 0; i < bn1.length; i++) sum += bn1[i] * weights.w2[i][j];
+    h2_pre.push(Math.max(0, sum));
   }
 
-  // 5. Dense 3 + ReLU
+  // 5. BatchNorm 2 (if present in retrained model)
+  let h2 = h2_pre;
+  if (weights.bn2_gamma) {
+    h2 = [];
+    for (let j = 0; j < h2_pre.length; j++) {
+      const std = Math.sqrt(weights.bn2_var[j] + weights.bn2_eps);
+      const norm = (h2_pre[j] - weights.bn2_mean[j]) / std;
+      h2.push(weights.bn2_gamma[j] * norm + weights.bn2_beta[j]);
+    }
+  }
+
+  // 6. Dense 3 + ReLU
   const h3 = [];
   for (let j = 0; j < weights.b3.length; j++) {
     let sum = weights.b3[j];
-    for (let i = 0; i < h2.length; i++) {
-      sum += h2[i] * weights.w3[i][j];
-    }
+    for (let i = 0; i < h2.length; i++) sum += h2[i] * weights.w3[i][j];
     h3.push(Math.max(0, sum));
   }
 
-  // 6. Shape Head (Softmax)
+  // 7. Shape Head (Softmax)
   const logits = [];
   for (let j = 0; j < weights.b_shape.length; j++) {
     let sum = weights.b_shape[j];
-    for (let i = 0; i < h3.length; i++) {
-      sum += h3[i] * weights.w_shape[i][j];
-    }
+    for (let i = 0; i < h3.length; i++) sum += h3[i] * weights.w_shape[i][j];
     logits.push(sum);
   }
   const maxL = Math.max(...logits);
@@ -152,11 +163,9 @@ function evaluatePrediction() {
   const sumExp = expL.reduce((a, b) => a + b, 0);
   const probs = expL.map(e => e / sumExp);
 
-  // 7. Dimension Head (Linear)
+  // 8. Dimension Head (Linear)
   let dim_mm = weights.b_dim[0];
-  for (let i = 0; i < h3.length; i++) {
-    dim_mm += h3[i] * weights.w_dim[i][0];
-  }
+  for (let i = 0; i < h3.length; i++) dim_mm += h3[i] * weights.w_dim[i][0];
 
   // Render results
   let bestIdx = 0;
@@ -238,7 +247,10 @@ function renderWaveform() {
   // Draw 9-Sensor Waveform
   const paddingX = 35;
   const stepX = (w - paddingX * 2) / (NUM_SENSORS - 1);
-  const maxSensorVal = 15.0;
+  // Scale waveform to physical sensor range
+  const waveMin = SENSOR_MIN;
+  const waveMax = SENSOR_MAX;
+  const waveRange = waveMax - waveMin;
 
   // Gradient fill under curve
   const grad = ctx.createLinearGradient(0, 0, 0, h);
@@ -248,12 +260,12 @@ function renderWaveform() {
   ctx.beginPath();
   sensorValues.forEach((val, i) => {
     const x = paddingX + i * stepX;
-    const y = h - 25 - (val / maxSensorVal) * (h - 45);
+    const y = h - 25 - ((val - waveMin) / waveRange) * (h - 45);
     if (i === 0) ctx.moveTo(x, y);
     else {
       // Smooth bezier curves
       const prevX = paddingX + (i - 1) * stepX;
-      const prevY = h - 25 - (sensorValues[i - 1] / maxSensorVal) * (h - 45);
+      const prevY = h - 25 - ((sensorValues[i - 1] - waveMin) / waveRange) * (h - 45);
       const cpX = (prevX + x) / 2;
       ctx.bezierCurveTo(cpX, prevY, cpX, y, x, y);
     }
@@ -269,7 +281,7 @@ function renderWaveform() {
   // Draw node points
   sensorValues.forEach((val, i) => {
     const x = paddingX + i * stepX;
-    const y = h - 25 - (val / maxSensorVal) * (h - 45);
+    const y = h - 25 - ((val - waveMin) / waveRange) * (h - 45);
 
     ctx.beginPath();
     ctx.arc(x, y, 5, 0, Math.PI * 2);
@@ -345,11 +357,11 @@ function setupEventListeners() {
     });
   });
 
-  // Randomize button
+  // Randomize button (keep values within physical sensor range)
   const btnRand = document.getElementById("btnRandomize");
   if (btnRand) {
     btnRand.addEventListener("click", () => {
-      sensorValues = sensorValues.map(() => +(Math.random() * 10).toFixed(2));
+      sensorValues = sensorValues.map(() => +(SENSOR_MIN + Math.random() * (SENSOR_MAX - SENSOR_MIN)).toFixed(2));
       renderSliderControls();
       onSensorDataChanged();
     });

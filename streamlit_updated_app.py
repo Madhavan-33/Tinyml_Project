@@ -25,7 +25,7 @@ except ImportError:
 
 # Page Configuration
 st.set_page_config(
-    page_title="9-Sensor Mesh Object & Size Analytics Lab",
+    page_title=" UNMANNED AERIAL VEHICLE[UAV] THRUST DATA PREDICTIVE ANALYSIS AND VISUALIZATION ",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -239,140 +239,49 @@ def render_kpi_card(label, value, subtext="", accent_color="#38bdf8"):
 # Hero Top Header Section
 st.markdown("""
 <div class="hero-banner">
-    <div class="hero-title">⚡ 9-Sensor Mesh & TinyML Object Identification Lab</div>
-    <div class="hero-subtitle">Isolate 9 Sensor Outputs (S1 ... S9) captured from physical mesh ➔ Predict Object Shape (Classification) & Dimension Size (Regression)</div>
+    <div class="hero-title">⚡ UNMANNED AERIAL VEHICLE[UAV] THRUST DATA PREDICTIVE ANALYSIS 
+AND VISUALIZATION </div>
+    <div class="hero-subtitle">Isolate  Sensor Outputs (S1 ... S9) captured from physical mesh ➔ Predict Object Shape (Classification) & Dimension Size (Regression)</div>
     <div class="status-badge-container">
         <div class="status-chip"><span class="chip-dot green"></span> TinyML 9-Input Model Active</div>
-        <div class="status-chip"><span class="chip-dot cyan"></span> 9-Channel Mesh & Correlation</div>
         <div class="status-chip"><span class="chip-dot purple"></span> Dual-Task: Shape & Size Prediction</div>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
 
-def auto_train_default_model(dataset_source=None):
-    from sklearn.preprocessing import StandardScaler, LabelEncoder
-    from convert_model import convert_tflite_to_c_header
+# Physical sensor voltage operating range for slider UI
+SENSOR_PHYSICAL_MIN = 1.5   # V
+SENSOR_PHYSICAL_MAX = 2.3   # V
+SENSOR_PHYSICAL_DEFAULT = 2.25  # V  (typical mean for real telemetry)
 
-    if dataset_source is None or not os.path.exists(str(dataset_source)):
-        dataset_source = "sensor_design_dataset.csv"
-        if not os.path.exists(dataset_source):
+def auto_train_default_model(dataset_source=None):
+    from retrain_on_telemetry import train as retrain_pipeline
+    PREFERRED_DATASETS = [
+        "all_runs_n10-n19_SS960_ipc.csv",
+        "sensor_design_dataset.csv",
+    ]
+    if dataset_source is None:
+        for ds in PREFERRED_DATASETS:
+            if os.path.exists(ds):
+                dataset_source = ds
+                break
+        if dataset_source is None:
+            dataset_source = "sensor_design_dataset.csv"
             from dataset_generator import generate_sensor_design_dataset
             generate_sensor_design_dataset(dataset_source)
 
-    if str(dataset_source).endswith('.csv'):
-        df = pd.read_csv(dataset_source)
-    else:
-        df = pd.read_excel(dataset_source)
-
-    cols_s = [c for c in df.columns if re.match(r'^s[1-9]$', c, re.IGNORECASE)]
-    if len(cols_s) < 9:
-        cols_s = [f'S{i}' for i in range(1, 10) if f'S{i}' in df.columns]
-    if len(cols_s) < 9:
-        numeric_cols = list(df.select_dtypes(include=[np.number]).columns)
-        cols_s = numeric_cols[:9]
-
-    shape_col = 'object_shape' if 'object_shape' in df.columns else next((c for c in df.columns if 'shape' in c.lower()), df.columns[1])
-    dim_col = 'dim_mm' if 'dim_mm' in df.columns else next((c for c in df.columns if 'dim' in c.lower() or 'size' in c.lower()), df.columns[2])
-
-    df_clean = df[cols_s[:9] + [shape_col, dim_col]].dropna().copy()
-    X_raw = df_clean[cols_s[:9]].values.astype(np.float32)
-
-    scaler_sensors = StandardScaler()
-    X_scaled = scaler_sensors.fit_transform(X_raw).astype(np.float32)
-
-    shape_encoder = LabelEncoder()
-    y_shape = shape_encoder.fit_transform(df_clean[shape_col].astype(str))
-    num_classes = len(shape_encoder.classes_)
-    y_dim = df_clean[dim_col].values.astype(np.float32)
-
-    # Build dual-head model
-    inputs = tf.keras.layers.Input(shape=(9,), name='sensor_inputs')
-    x = tf.keras.layers.Dense(64, activation='relu')(inputs)
-    x = tf.keras.layers.BatchNormalization()(x)
-    x = tf.keras.layers.Dropout(0.1)(x)
-    x = tf.keras.layers.Dense(64, activation='relu')(x)
-    x = tf.keras.layers.Dense(32, activation='relu')(x)
-
-    shape_out = tf.keras.layers.Dense(num_classes, activation='softmax', name='shape_out')(x)
-    dim_out = tf.keras.layers.Dense(1, activation='linear', name='dim_out')(x)
-
-    training_model = tf.keras.models.Model(inputs=inputs, outputs=[shape_out, dim_out])
-    training_model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=0.002),
-        loss={'shape_out': 'sparse_categorical_crossentropy', 'dim_out': 'mse'},
-        loss_weights={'shape_out': 1.0, 'dim_out': 0.05}
-    )
-    training_model.fit(X_scaled, [y_shape, y_dim], epochs=45, batch_size=32, verbose=0)
-
-    # Export combined model
-    combined_out = tf.keras.layers.Concatenate(axis=-1, name='combined')([shape_out, dim_out])
-    export_model = tf.keras.models.Model(inputs=inputs, outputs=combined_out)
-
-    preds_all = export_model.predict(X_scaled, verbose=0)
-    pred_shape_idx = np.argmax(preds_all[:, :num_classes], axis=1)
-    pred_dims = preds_all[:, -1]
-
-    acc = accuracy_score(y_shape, pred_shape_idx)
-    mae = mean_absolute_error(y_dim, pred_dims)
-    r2 = r2_score(y_dim, pred_dims)
-
-    metadata = {
-        'input_features': cols_s[:9],
-        'shape_classes': list(shape_encoder.classes_),
-        'shape_encoder': shape_encoder,
-        'shape_col': shape_col,
-        'dim_col': dim_col,
-        'scaler_sensors': scaler_sensors,
-        'sensor_means': scaler_sensors.mean_.tolist(),
-        'sensor_stds': np.sqrt(scaler_sensors.var_).tolist(),
-        'accuracy': float(acc),
-        'dim_mae': float(mae),
-        'dim_r2': float(r2),
-        'num_inputs': 9,
-        'num_classes': num_classes,
-        'num_outputs': num_classes + 1
-    }
-    joblib.dump(metadata, 'model_metadata.pkl')
-
-    converter = tf.lite.TFLiteConverter.from_keras_model(export_model)
-    converter.optimizations = [tf.lite.Optimize.DEFAULT]
-    tflite_model = converter.convert()
-    with open("anomaly_model.tflite", "wb") as f:
-        f.write(tflite_model)
-
-    num_inputs = 9
-    num_outputs = num_classes + 1
-    in_means_str = ", ".join([f"{m:.6f}f" for m in scaler_sensors.mean_])
-    in_stds_str = ", ".join([f"{s:.6f}f" for s in np.sqrt(scaler_sensors.var_)])
-    class_names_str = ", ".join([f'"{c}"' for c in shape_encoder.classes_])
-
-    header_content = f"""#ifndef MODEL_CONFIG_H
-#define MODEL_CONFIG_H
-
-#define NUM_INPUTS {num_inputs}
-#define NUM_OUTPUTS {num_outputs}
-#define NUM_SHAPE_CLASSES {num_classes}
-
-static const float INPUT_MEANS[{num_inputs}] = {{ {in_means_str} }};
-static const float INPUT_STDS[{num_inputs}] = {{ {in_stds_str} }};
-static const char* const SHAPE_CLASSES[{num_classes}] = {{ {class_names_str} }};
-
-#endif
-"""
-    with open("model_config.h", "w") as f:
-        f.write(header_content)
-
-    try:
-        convert_tflite_to_c_header("anomaly_model.tflite", "model_data.h")
-    except Exception:
-        pass
-
+    retrain_pipeline(dataset_source, epochs=40, batch_size=128, lr=0.001, max_samples=60000, verbose=0)
     st.cache_resource.clear()
     return True
 
+def get_model_cache_key():
+    t_mod = os.path.getmtime("anomaly_model.tflite") if os.path.exists("anomaly_model.tflite") else 0
+    t_meta = os.path.getmtime("model_metadata.pkl") if os.path.exists("model_metadata.pkl") else 0
+    return f"{t_mod}_{t_meta}"
+
 @st.cache_resource
-def load_tflite_model():
+def load_tflite_model(version_key):
     try:
         interpreter = tf.lite.Interpreter(model_path="anomaly_model.tflite")
         interpreter.allocate_tensors()
@@ -381,7 +290,7 @@ def load_tflite_model():
         return None
 
 @st.cache_resource
-def load_metadata():
+def load_metadata(version_key):
     try:
         meta = joblib.load("model_metadata.pkl")
         if 'scaler_sensors' in meta:
@@ -390,14 +299,16 @@ def load_metadata():
     except Exception:
         return None
 
-interpreter = load_tflite_model()
-metadata = load_metadata()
+v_key = get_model_cache_key()
+interpreter = load_tflite_model(v_key)
+metadata = load_metadata(v_key)
 
 if interpreter is None or metadata is None:
     with st.spinner("⚙️ Initializing 9-Sensor TinyML Object & Sizing Model..."):
         auto_train_default_model()
-        interpreter = load_tflite_model()
-        metadata = load_metadata()
+        v_key = get_model_cache_key()
+        interpreter = load_tflite_model(v_key)
+        metadata = load_metadata(v_key)
         st.success("✅ Model initialized successfully!")
 
 scaler_sensors = metadata['scaler_sensors']
@@ -419,7 +330,7 @@ def find_available_datasets():
 # Sidebar Ingestion & Filter Controls (Reduce Data-Size)
 st.sidebar.markdown("### 📥 Telemetry Dataset & Filters")
 
-with st.sidebar.expander("❓ Mentor Requirements & Architecture", expanded=False):
+with st.sidebar.expander("❓ Requirements & Architecture", expanded=False):
     st.markdown("""
     **Architecture Highlights:**
     - **Features**: Strictly the **9 sensor outputs** (`S1` to `S9`) captured from sensor mesh.
@@ -457,32 +368,57 @@ except Exception as e:
     st.error(f"Error loading dataset: {e}")
     st.stop()
 
-# Detect Columns
-curr_shape_col = 'object_shape' if 'object_shape' in df_raw.columns else next((c for c in df_raw.columns if 'shape' in c.lower()), df_raw.columns[1])
-curr_dim_col = 'dim_mm' if 'dim_mm' in df_raw.columns else next((c for c in df_raw.columns if 'dim' in c.lower() or 'size' in c.lower()), df_raw.columns[2])
+# Intelligent Detection of Sensor Columns (S1 ... S9)
+cols_s = [c for c in df_raw.columns if re.match(r'^s[1-9]$', c, re.IGNORECASE)]
+if len(cols_s) < 9:
+    cols_s = [f'S{i}' for i in range(1, 10) if f'S{i}' in df_raw.columns]
+if len(cols_s) < 9:
+    numeric_cols = list(df_raw.select_dtypes(include=[np.number]).columns)
+    cols_s = numeric_cols[:9]
+
+# Intelligent Detection of Shape Ground Truth Column
+candidate_shape_cols = [c for c in df_raw.columns if any(k in c.lower() for k in ['shape', 'object_shape', 'object', 'class', 'geometry'])]
+if not candidate_shape_cols:
+    for c in df_raw.columns:
+        if df_raw[c].dtype == object or str(df_raw[c].dtype).startswith('string'):
+            unique_vals = set(df_raw[c].dropna().astype(str).str.strip().str.lower().unique())
+            if any(s.lower() in unique_vals for s in shape_classes):
+                candidate_shape_cols.append(c)
+                break
+
+curr_shape_col = candidate_shape_cols[0] if candidate_shape_cols else None
+
+# Intelligent Detection of Dimension Ground Truth Column
+candidate_dim_cols = [c for c in df_raw.columns if any(k in c.lower() for k in ['dim_mm', 'dim', 'dimension', 'size_mm', 'size'])]
+curr_dim_col = candidate_dim_cols[0] if candidate_dim_cols else None
+
+has_truth = (curr_shape_col is not None and curr_dim_col is not None)
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🎯 Filter & Reduce Data-Size")
 
-# 1. Filter Object Shape
-available_shapes = sorted(list(df_raw[curr_shape_col].dropna().unique()))
-filter_shapes = st.sidebar.multiselect("Object Shape Filter:", options=available_shapes, default=available_shapes)
-if not filter_shapes: filter_shapes = available_shapes
+if has_truth:
+    available_shapes = sorted(list(df_raw[curr_shape_col].dropna().unique()))
+    filter_shapes = st.sidebar.multiselect("Object Shape Filter:", options=available_shapes, default=available_shapes)
+    if not filter_shapes: filter_shapes = available_shapes
 
-# 2. Filter Dimension Range
-min_d = float(df_raw[curr_dim_col].min())
-max_d = float(df_raw[curr_dim_col].max())
-filter_dim_range = st.sidebar.slider("Dimension `dim_mm` (mm):", min_value=round(min_d, 1), max_value=round(max_d, 1), value=(round(min_d, 1), round(max_d, 1)), step=0.5)
+    min_d = float(pd.to_numeric(df_raw[curr_dim_col], errors='coerce').min())
+    max_d = float(pd.to_numeric(df_raw[curr_dim_col], errors='coerce').max())
+    filter_dim_range = st.sidebar.slider("Dimension `dim_mm` (mm):", min_value=round(min_d, 1), max_value=round(max_d, 1), value=(round(min_d, 1), round(max_d, 1)), step=0.5)
 
-# 3. Downsample Rate to reduce size
-filter_step = st.sidebar.selectbox("Sample Step (Reduce Data):", options=[1, 2, 3, 5, 10], format_func=lambda x: f"Every {x} sample" if x > 1 else "1:1 Full Resolution")
+    filter_step = st.sidebar.selectbox("Sample Step (Reduce Data):", options=[1, 2, 3, 5, 10], format_func=lambda x: f"Every {x} sample" if x > 1 else "1:1 Full Resolution")
 
-# Apply Filter
-df_filtered = df_raw[
-    (df_raw[curr_shape_col].isin(filter_shapes)) &
-    (df_raw[curr_dim_col] >= filter_dim_range[0]) &
-    (df_raw[curr_dim_col] <= filter_dim_range[1])
-].copy()
+    df_filtered = df_raw[
+        (df_raw[curr_shape_col].isin(filter_shapes)) &
+        (df_raw[curr_dim_col] >= filter_dim_range[0]) &
+        (df_raw[curr_dim_col] <= filter_dim_range[1])
+    ].copy()
+else:
+    filter_shapes = []
+    filter_dim_range = (0.0, 0.0)
+    st.sidebar.info("ℹ️ Telemetry Mode: No shape/dimension ground-truth columns in file. Direct inference active.")
+    filter_step = st.sidebar.selectbox("Sample Step (Reduce Data):", options=[1, 2, 3, 5, 10], format_func=lambda x: f"Every {x} sample" if x > 1 else "1:1 Full Resolution")
+    df_filtered = df_raw.copy()
 
 if filter_step > 1:
     df_filtered = df_filtered.iloc[::filter_step].copy()
@@ -493,7 +429,7 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("### ⚡ Model Retraining")
 if st.sidebar.button("🛠️ Retrain 9-Sensor Model", use_container_width=True):
     with st.spinner("Retraining 9-Sensor model on active file..."):
-        auto_train_default_model(dataset_source=file_source)
+        auto_train_default_model(dataset_source=df_raw)
         st.sidebar.success("✅ Model retrained successfully!")
         st.rerun()
 
@@ -519,7 +455,11 @@ with tab0:
     with c1: render_kpi_card("Filtered Samples", f"{n_rows:,}", f"Original: {len(df_raw):,}", "#38bdf8")
     with c2: render_kpi_card("Data Reduction", f"{((len(df_raw)-n_rows)/len(df_raw))*100.0:.1f}%", "Memory Optimized", "#34d399")
     with c3: render_kpi_card("Sensor Mesh", f"{len(cols_s)} Channels", "S1 - S9 Inputs", "#818cf8")
-    with c4: render_kpi_card("Selected Shapes", f"{len(filter_shapes)}", ", ".join(filter_shapes), "#c084fc")
+    with c4:
+        if has_truth:
+            render_kpi_card("Selected Shapes", f"{len(filter_shapes)}", ", ".join([str(s) for s in filter_shapes]), "#c084fc")
+        else:
+            render_kpi_card("Data Mode", "Live Telemetry", f"{n_cols} Channels", "#c084fc")
 
     st.markdown("<br>", unsafe_allow_html=True)
     
@@ -533,7 +473,8 @@ with tab0:
         if s_name in plot_sub.columns:
             ax_9leg.plot(plot_sub.index, plot_sub[s_name], label=f'{s_name}', color=colors_9[idx % len(colors_9)], linewidth=1.8, alpha=0.9)
 
-    apply_axes_dark_style(ax_9leg, title=f"9 Sensor Traces (S1 - S9) for Shapes: {', '.join(filter_shapes)} | Dimensions: {filter_dim_range[0]}-{filter_dim_range[1]}mm", xlabel="Filtered Sample Index", ylabel="Sensor Amplitude")
+    plot_title = f"9 Sensor Traces (S1 - S9) for Shapes: {', '.join([str(s) for s in filter_shapes])} | Dimensions: {filter_dim_range[0]}-{filter_dim_range[1]}mm" if has_truth else "9 Sensor Output Signals (S1 - S9)"
+    apply_axes_dark_style(ax_9leg, title=plot_title, xlabel="Filtered Sample Index", ylabel="Sensor Amplitude")
     ax_9leg.legend(loc="upper right", facecolor='#0f172a', edgecolor='#1e293b', fontsize=8.5, ncol=5, title="9 Sensor Legends")
     plt.tight_layout()
     st.pyplot(fig_9leg)
@@ -594,20 +535,56 @@ with tab1:
 
     target_eval_df = df_filtered.copy() if "Filtered" in run_mode else df_raw.copy()
 
+    # Ground truth validation and label alignment check
+    has_truth = bool(curr_shape_col and curr_dim_col and curr_shape_col in target_eval_df.columns and curr_dim_col in target_eval_df.columns)
+    if has_truth:
+        actual_classes_in_data = set(target_eval_df[curr_shape_col].dropna().astype(str).str.strip().str.lower().unique())
+        model_classes_set = set(c.lower() for c in shape_classes)
+        unseen_classes = sorted(list(actual_classes_in_data - model_classes_set))
+        if unseen_classes:
+            st.warning(
+                f"⚠️ **Model & Dataset Label Mismatch**: The currently loaded model was trained on `{list(shape_classes)}`, "
+                f"but this dataset contains `{unseen_classes}`. "
+                "The model cannot accurately predict classes it was never trained on!"
+            )
+            if st.button("🛠️ Retrain Model on Active Dataset Now (1-Click Fix)", type="primary", key="quick_retrain_tab1"):
+                with st.spinner("Retraining model on this dataset..."):
+                    auto_train_default_model(dataset_source=df_raw)
+                    st.success("✅ Model retrained on active dataset! Reloading...")
+                    st.rerun()
+
     if execute_all or 'pred_cache' in st.session_state:
         if execute_all:
-            with st.spinner(f"Running inference across {len(target_eval_df):,} records..."):
+            with st.spinner(f"Running high-speed inference across {len(target_eval_df):,} records..."):
                 clean_eval_df = target_eval_df[cols_s[:9]].dropna().copy()
                 X_eval_raw = clean_eval_df[cols_s[:9]].values.astype(np.float32)
                 X_eval_scaled = scaler_sensors.transform(X_eval_raw).astype(np.float32)
 
-                all_preds = []
-                for i in range(len(X_eval_scaled)):
-                    sample = X_eval_scaled[i:i+1]
-                    interpreter.set_tensor(input_details[0]['index'], sample)
+                # High-speed vectorized batched TFLite execution
+                try:
+                    interpreter.resize_tensor_input(input_details[0]['index'], [len(X_eval_scaled), 9])
+                    interpreter.allocate_tensors()
+                    interpreter.set_tensor(input_details[0]['index'], X_eval_scaled)
                     interpreter.invoke()
-                    out_t = interpreter.get_tensor(output_details[0]['index'])
-                    all_preds.append(out_t[0])
+                    all_preds = interpreter.get_tensor(output_details[0]['index'])
+                except Exception:
+                    batch_sz = 10000
+                    chunks = []
+                    for b_start in range(0, len(X_eval_scaled), batch_sz):
+                        chunk = X_eval_scaled[b_start:b_start + batch_sz]
+                        interpreter.resize_tensor_input(input_details[0]['index'], [len(chunk), 9])
+                        interpreter.allocate_tensors()
+                        interpreter.set_tensor(input_details[0]['index'], chunk)
+                        interpreter.invoke()
+                        chunks.append(interpreter.get_tensor(output_details[0]['index']))
+                    all_preds = np.vstack(chunks)
+
+                # Reset interpreter tensor shape back to [1, 9] for single-sample playground
+                try:
+                    interpreter.resize_tensor_input(input_details[0]['index'], [1, 9])
+                    interpreter.allocate_tensors()
+                except Exception:
+                    pass
 
                 all_preds = np.array(all_preds)
                 pred_shape_probs = all_preds[:, :num_classes]
@@ -621,17 +598,18 @@ with tab1:
                 results_df['Shape_Confidence_%'] = np.round(pred_confidences, 1)
                 results_df['Predicted_Size_mm'] = np.round(pred_dims, 2)
 
-                has_truth = curr_shape_col in results_df.columns and curr_dim_col in results_df.columns
+                has_truth = bool(curr_shape_col and curr_dim_col and curr_shape_col in results_df.columns and curr_dim_col in results_df.columns)
                 if has_truth:
                     results_df['Actual_Object'] = results_df[curr_shape_col]
-                    results_df['Actual_Size_mm'] = np.round(results_df[curr_dim_col], 2)
-                    results_df['Shape_Match'] = ["✅ MATCH" if a == p else "❌ MISMATCH" for a, p in zip(results_df['Actual_Object'], results_df['Predicted_Object'])]
+                    results_df['Actual_Size_mm'] = np.round(pd.to_numeric(results_df[curr_dim_col], errors='coerce').fillna(0.0), 2)
+                    results_df['Shape_Match'] = ["✅ MATCH" if str(a).strip().lower() == str(p).strip().lower() else "❌ MISMATCH" for a, p in zip(results_df['Actual_Object'], results_df['Predicted_Object'])]
                     results_df['Size_Error_mm'] = np.round(np.abs(results_df['Actual_Size_mm'] - results_df['Predicted_Size_mm']), 2)
 
-                    # Safe label encoding: handle unseen labels (e.g. shapes not in training set)
-                    known_classes = list(shape_encoder.classes_)
+                    # Safe label encoding: handle unseen labels
+                    known_classes = [c.lower() for c in shape_encoder.classes_]
                     def safe_encode(label):
-                        return known_classes.index(label) if label in known_classes else -1
+                        lbl = str(label).strip().lower()
+                        return known_classes.index(lbl) if lbl in known_classes else -1
 
                     y_true_shape_raw = results_df['Actual_Object'].astype(str).tolist()
                     y_true_shape = np.array([safe_encode(lbl) for lbl in y_true_shape_raw])
@@ -645,7 +623,7 @@ with tab1:
                         eval_r2 = r2_score(results_df['Actual_Size_mm'].values[known_mask], pred_dims[known_mask])
                         unseen_labels = set(np.array(y_true_shape_raw)[~known_mask])
                         if unseen_labels:
-                            st.warning(f"⚠️ Dataset contains **{(~known_mask).sum()} rows** with unseen object labels not in training: `{'`, `'.join(sorted(unseen_labels))}`. These rows are excluded from accuracy metrics but predictions are still shown.")
+                            st.warning(f"⚠️ Dataset contains **{(~known_mask).sum()} rows** with unseen labels: `{'`, `'.join(sorted(unseen_labels))}`.")
                     else:
                         eval_acc, eval_mae, eval_rmse, eval_r2 = None, None, None, None
                         st.warning("⚠️ No rows matched the trained shape labels — metrics cannot be computed.")
@@ -670,7 +648,7 @@ with tab1:
 
         if has_truth and cache['eval_acc'] is not None:
             p1, p2, p3, p4 = st.columns(4)
-            with p1: render_kpi_card("Object Accuracy", f"{cache['eval_acc']*100.0:.1f}%", "Shape Classification", "#34d399")
+            with p1: render_kpi_card("Object Accuracy", f"{cache['eval_acc']*100.0:.1f}%", "Shape Classification (✅)", "#34d399")
             with p2: render_kpi_card("Size MAE", f"{cache['eval_mae']:.2f} mm", "Mean Absolute Error", "#38bdf8")
             with p3: render_kpi_card("Size RMSE", f"{cache['eval_rmse']:.2f} mm", "Root Mean Square", "#f59e0b")
             with p4: render_kpi_card("Size R² Score", f"{cache['eval_r2']:.3f}", "Regression Fit Quality", "#c084fc")
@@ -704,31 +682,52 @@ with tab1:
 
             with r_col2:
                 fig_sc, ax_sc = plt.subplots(figsize=(5.5, 3.8), **setup_dark_plot_style())
+                scatter_df = res_df.sample(n=min(len(res_df), 4000), random_state=42) if len(res_df) > 4000 else res_df
                 for c_idx, c_name in enumerate(shape_classes):
-                    sub_m = (res_df['Predicted_Object'] == c_name)
-                    ax_sc.scatter(res_df.loc[sub_m, 'Actual_Size_mm'], res_df.loc[sub_m, 'Predicted_Size_mm'], label=c_name, alpha=0.7, s=26, color=colors_9[c_idx % len(colors_9)])
+                    sub_m = (scatter_df['Predicted_Object'] == c_name)
+                    ax_sc.scatter(scatter_df.loc[sub_m, 'Actual_Size_mm'], scatter_df.loc[sub_m, 'Predicted_Size_mm'], label=c_name, alpha=0.7, s=26, color=colors_9[c_idx % len(colors_9)])
                 
-                min_val = min(res_df['Actual_Size_mm'].min(), res_df['Predicted_Size_mm'].min())
-                max_val = max(res_df['Actual_Size_mm'].max(), res_df['Predicted_Size_mm'].max())
+                min_val = min(scatter_df['Actual_Size_mm'].min(), scatter_df['Predicted_Size_mm'].min())
+                max_val = max(scatter_df['Actual_Size_mm'].max(), scatter_df['Predicted_Size_mm'].max())
                 ax_sc.plot([min_val, max_val], [min_val, max_val], color='#ef4444', linestyle='--', linewidth=2, label='Ideal y=x')
                 apply_axes_dark_style(ax_sc, title=f"Actual vs Predicted Size (MAE = {cache['eval_mae']:.2f} mm)", xlabel="Actual Size (mm)", ylabel="Predicted Size (mm)")
                 ax_sc.legend(loc="upper left", facecolor='#0f172a', edgecolor='#1e293b', fontsize=8)
                 plt.tight_layout()
                 st.pyplot(fig_sc)
+        else:
+            # Telemetry Mode: Inference summary KPIs
+            p1, p2, p3, p4 = st.columns(4)
+            top_shape = res_df['Predicted_Object'].mode().iloc[0] if len(res_df) > 0 else "N/A"
+            avg_conf = res_df['Shape_Confidence_%'].mean() if len(res_df) > 0 else 0.0
+            avg_size = res_df['Predicted_Size_mm'].mean() if len(res_df) > 0 else 0.0
+            min_max_size = f"{res_df['Predicted_Size_mm'].min():.1f} - {res_df['Predicted_Size_mm'].max():.1f} mm" if len(res_df) > 0 else "N/A"
+            with p1: render_kpi_card("Dominant Shape", f"{top_shape}", "Primary Classification", "#34d399")
+            with p2: render_kpi_card("Mean Confidence", f"{avg_conf:.1f}%", "Softmax Probability", "#38bdf8")
+            with p3: render_kpi_card("Mean Est. Size", f"{avg_size:.2f} mm", "Regression Estimate", "#f59e0b")
+            with p4: render_kpi_card("Size Dynamic Range", f"{min_max_size}", "Predicted Span", "#c084fc")
+
+            st.info("ℹ️ **Live Telemetry Stream Mode**: Inference performed on all active records. To test ground-truth shape matching (✅ MATCH / ❌ MISMATCH), select **sensor_design_dataset.csv** in the sidebar.")
 
         st.markdown("#### 📋 Prediction Audit Table")
         
-        filter_view = st.radio("Display Filter:", options=["All Predictions", "Matches Only (✅)", "Mismatches Only (❌)"], horizontal=True)
-        if filter_view == "Matches Only (✅)" and 'Shape_Match' in res_df.columns:
-            display_df = res_df[res_df['Shape_Match'] == "✅ MATCH"]
-        elif filter_view == "Mismatches Only (❌)" and 'Shape_Match' in res_df.columns:
-            display_df = res_df[res_df['Shape_Match'] == "❌ MISMATCH"]
-        else:
-            display_df = res_df
-
-        view_order = ['Predicted_Object', 'Shape_Confidence_%', 'Predicted_Size_mm']
         if has_truth:
+            filter_view = st.radio("Display Filter:", options=["All Predictions", "Matches Only (✅)", "Mismatches Only (❌)"], horizontal=True)
+            if filter_view == "Matches Only (✅)" and 'Shape_Match' in res_df.columns:
+                display_df = res_df[res_df['Shape_Match'] == "✅ MATCH"]
+            elif filter_view == "Mismatches Only (❌)" and 'Shape_Match' in res_df.columns:
+                display_df = res_df[res_df['Shape_Match'] == "❌ MISMATCH"]
+            else:
+                display_df = res_df
             view_order = ['Actual_Object', 'Predicted_Object', 'Shape_Match', 'Shape_Confidence_%', 'Actual_Size_mm', 'Predicted_Size_mm', 'Size_Error_mm']
+        else:
+            shape_opts = ["All Predictions"] + list(shape_classes)
+            filter_view = st.radio("Filter Predicted Class:", options=shape_opts, horizontal=True)
+            if filter_view != "All Predictions":
+                display_df = res_df[res_df['Predicted_Object'] == filter_view]
+            else:
+                display_df = res_df
+            view_order = ['Predicted_Object', 'Shape_Confidence_%', 'Predicted_Size_mm']
+
         view_order += cols_s[:9]
 
         st.dataframe(display_df[view_order].head(200), use_container_width=True)
@@ -751,22 +750,42 @@ with tab2:
 
     with col_sim1:
         st.markdown("#### 📡 9 Sensor Input Channels (S1 - S9)")
-        
-        # Preset buttons from dataset
+
+        # Physical range info
+        st.caption(
+            f"ℹ️ Sensor voltage operating range: **{SENSOR_PHYSICAL_MIN}V – {SENSOR_PHYSICAL_MAX}V** "
+            f"(actual mesh telemetry). Default = {SENSOR_PHYSICAL_DEFAULT}V (dataset mean)."
+        )
+
+        # Preset: load a real record from dataset (clamp to physical range)
         if st.button("🎲 Load Random Real Record Preset", use_container_width=True):
             rand_row = df_raw.sample(1).iloc[0]
             for i, s_col in enumerate(cols_s[:9]):
-                st.session_state[f'slider_{s_col}'] = float(rand_row[s_col])
+                raw_val = float(rand_row[s_col])
+                # Clamp to physical slider range
+                clamped = float(np.clip(raw_val, SENSOR_PHYSICAL_MIN, SENSOR_PHYSICAL_MAX))
+                st.session_state[f'slider_{s_col}'] = clamped
 
         sim_sensors = []
         for i, s_col in enumerate(cols_s[:9]):
-            default_val = float(scaler_sensors.mean_[i])
+            # Default value: use dataset mean if it's within physical range,
+            # otherwise use the physical default (2.25V)
+            raw_mean = float(scaler_sensors.mean_[i])
+            if SENSOR_PHYSICAL_MIN <= raw_mean <= SENSOR_PHYSICAL_MAX:
+                default_val = raw_mean
+            else:
+                default_val = SENSOR_PHYSICAL_DEFAULT
+
             val = st.slider(
                 f"Sensor {s_col}:",
-                min_value=0.0,
-                max_value=50.0,
-                value=float(st.session_state.get(f'slider_{s_col}', default_val)),
-                step=0.1,
+                min_value=SENSOR_PHYSICAL_MIN,
+                max_value=SENSOR_PHYSICAL_MAX,
+                value=float(np.clip(
+                    st.session_state.get(f'slider_{s_col}', default_val),
+                    SENSOR_PHYSICAL_MIN, SENSOR_PHYSICAL_MAX
+                )),
+                step=0.01,
+                format="%.2f V",
                 key=f'slider_{s_col}'
             )
             sim_sensors.append(val)
@@ -774,9 +793,19 @@ with tab2:
     with col_sim2:
         st.markdown("#### 🎯 Predicted Object & Size Output")
 
-        # Normalize 9 sensor inputs
+        # --- Scaler correctness verification ---
+        # The StandardScaler fitted on the training dataset transforms raw sensor
+        # voltage readings to zero-mean, unit-variance before passing to the TFLite model.
+        # This is the SAME scaler saved in model_metadata.pkl during training.
         sim_raw = np.array([sim_sensors], dtype=np.float32)
-        sim_scaled = scaler_sensors.transform(sim_raw).astype(np.float32)
+        sim_scaled = scaler_sensors.transform(sim_raw).astype(np.float32)  # (1, 9) scaled
+        # Sanity: print if any scaled value is extreme (OOD indicator)
+        max_scaled_val = float(np.max(np.abs(sim_scaled)))
+        if max_scaled_val > 5.0:
+            st.warning(
+                f"⚠ Scaled input has extreme values (max |z|={max_scaled_val:.1f}). "
+                "Sensor values may be out-of-distribution — check slider range."
+            )
 
         interpreter.set_tensor(input_details[0]['index'], sim_scaled)
         interpreter.invoke()

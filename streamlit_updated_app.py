@@ -340,6 +340,14 @@ with st.sidebar.expander("❓ Requirements & Architecture", expanded=False):
     - **All Data Prediction**: Evaluates which object and what size based on predicted values.
     """)
 
+@st.cache_data(show_spinner=False, max_entries=2)
+def load_optimized_dataframe(src, is_csv=True, sheet=None):
+    if is_csv:
+        dtypes = {f'S{i}': 'float32' for i in range(1, 10)}
+        return pd.read_csv(src, dtype=dtypes, low_memory=True)
+    else:
+        return pd.read_excel(src, sheet_name=sheet)
+
 uploaded_file = st.sidebar.file_uploader("Upload Dataset (.csv / .xlsx):", type=["csv", "xlsx"])
 available_files = find_available_datasets()
 
@@ -347,7 +355,8 @@ if uploaded_file is not None:
     file_source = uploaded_file
     file_name = uploaded_file.name
 elif available_files:
-    default_idx = available_files.index("sensor_design_dataset.csv") if "sensor_design_dataset.csv" in available_files else 0
+    preferred_default = "all_runs_n10-n19_SS960_ipc.csv" if "all_runs_n10-n19_SS960_ipc.csv" in available_files else ("sensor_design_dataset.csv" if "sensor_design_dataset.csv" in available_files else available_files[0])
+    default_idx = available_files.index(preferred_default)
     file_name = st.sidebar.selectbox("Workspace Dataset:", options=available_files, index=default_idx)
     file_source = file_name
 else:
@@ -359,11 +368,11 @@ if file_source is None:
 
 try:
     if file_name.endswith('.csv'):
-        df_raw = pd.read_csv(file_source)
+        df_raw = load_optimized_dataframe(file_source, is_csv=True)
     else:
         xls = pd.ExcelFile(file_source)
         selected_sheet = st.sidebar.selectbox("Sheet Name:", options=xls.sheet_names)
-        df_raw = pd.read_excel(xls, sheet_name=selected_sheet)
+        df_raw = load_optimized_dataframe(file_source, is_csv=False, sheet=selected_sheet)
 except Exception as e:
     st.error(f"Error loading dataset: {e}")
     st.stop()

@@ -434,12 +434,16 @@ canvas#sensorWaveCanvas {
   transition: width 0.35s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.bar-beam {
+.bar-cube {
   background: linear-gradient(90deg, #38bdf8, #0ea5e9);
 }
 
 .bar-cylinder {
   background: linear-gradient(90deg, #818cf8, #6366f1);
+}
+
+.bar-beam {
+  background: linear-gradient(90deg, #38bdf8, #0ea5e9);
 }
 
 .bar-sphere {

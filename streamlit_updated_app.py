@@ -251,19 +251,19 @@ AND VISUALIZATION </div>
 
 
 # Physical sensor voltage operating range for slider UI
-SENSOR_PHYSICAL_MIN = 1.5   # V
-SENSOR_PHYSICAL_MAX = 2.3   # V
-SENSOR_PHYSICAL_DEFAULT = 2.25  # V  (typical mean for real telemetry)
+SENSOR_PHYSICAL_MIN = 1.60   # V
+SENSOR_PHYSICAL_MAX = 2.28   # V
+SENSOR_PHYSICAL_DEFAULT = 2.15  # V  (typical mesh telemetry baseline)
 
 def auto_train_default_model(dataset_source=None):
     from retrain_on_telemetry import train as retrain_pipeline
     PREFERRED_DATASETS = [
-        "all_runs_n10-n19_SS960_ipc.csv",
         "sensor_design_dataset.csv",
+        "all_runs_n10-n19_SS960_ipc.csv",
     ]
     if dataset_source is None:
         for ds in PREFERRED_DATASETS:
-            if os.path.exists(ds):
+            if os.path.exists(ds) and os.path.getsize(ds) > 100:
                 dataset_source = ds
                 break
         if dataset_source is None:
@@ -271,7 +271,7 @@ def auto_train_default_model(dataset_source=None):
             from dataset_generator import generate_sensor_design_dataset
             generate_sensor_design_dataset(dataset_source)
 
-    retrain_pipeline(dataset_source, epochs=40, batch_size=128, lr=0.001, max_samples=60000, verbose=0)
+    retrain_pipeline(dataset_source, epochs=50, batch_size=32, lr=0.002, verbose=0)
     st.cache_resource.clear()
     return True
 
@@ -323,7 +323,13 @@ input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
 
 def find_available_datasets():
-    files = [f for f in os.listdir('.') if (f.endswith('.csv') or f.endswith('.xlsx')) and not f.startswith('~$')]
+    files = [
+        f for f in os.listdir('.')
+        if (f.endswith('.csv') or f.endswith('.xlsx'))
+        and not f.startswith('~$')
+        and os.path.exists(f)
+        and os.path.getsize(f) > 100
+    ]
     return files if files else None
 
 
@@ -340,7 +346,7 @@ with st.sidebar.expander("❓ Requirements & Architecture", expanded=False):
     - **All Data Prediction**: Evaluates which object and what size based on predicted values.
     """)
 
-@st.cache_data(show_spinner=False, max_entries=2)
+@st.cache_data(show_spinner=False, max_entries=4)
 def load_optimized_dataframe(src, is_csv=True, sheet=None):
     if is_csv:
         dtypes = {f'S{i}': 'float32' for i in range(1, 10)}
@@ -355,7 +361,7 @@ if uploaded_file is not None:
     file_source = uploaded_file
     file_name = uploaded_file.name
 elif available_files:
-    preferred_default = "all_runs_n10-n19_SS960_ipc.csv" if "all_runs_n10-n19_SS960_ipc.csv" in available_files else ("sensor_design_dataset.csv" if "sensor_design_dataset.csv" in available_files else available_files[0])
+    preferred_default = "sensor_design_dataset.csv" if "sensor_design_dataset.csv" in available_files else ("all_runs_n10-n19_SS960_ipc.csv" if "all_runs_n10-n19_SS960_ipc.csv" in available_files else available_files[0])
     default_idx = available_files.index(preferred_default)
     file_name = st.sidebar.selectbox("Workspace Dataset:", options=available_files, index=default_idx)
     file_source = file_name

@@ -99,13 +99,21 @@ def run_inference(sensors):
         # Forward pass: Layer 3
         h3 = np.maximum(0, np.dot(h2, w3) + b3)
 
+        # Optional Layer 4
+        if "w4" in weights:
+            w4 = np.array(weights["w4"], dtype=np.float32)
+            b4 = np.array(weights["b4"], dtype=np.float32)
+            h_out = np.maximum(0, np.dot(h3, w4) + b4)
+        else:
+            h_out = h3
+
         # Shape head (Softmax)
-        logits = np.dot(h3, w_shape) + b_shape
+        logits = np.dot(h_out, w_shape) + b_shape
         e = np.exp(logits - np.max(logits))
         probs = (e / np.sum(e)).tolist()
 
         # Dimension head (Linear)
-        dim_mm = float(np.dot(h3, w_dim)[0] + b_dim[0])
+        dim_mm = float(np.dot(h_out, w_dim)[0] + b_dim[0])
 
     except ImportError:
         # Pure Python fallback
@@ -145,10 +153,19 @@ def run_inference(sensors):
             val = sum(h2[i] * weights["w3"][i][j] for i in range(len(h2))) + weights["b3"][j]
             h3.append(max(0.0, val))
 
+        # Optional Dense 4
+        if "w4" in weights:
+            h_out = []
+            for j in range(len(weights["b4"])):
+                val = sum(h3[i] * weights["w4"][i][j] for i in range(len(h3))) + weights["b4"][j]
+                h_out.append(max(0.0, val))
+        else:
+            h_out = h3
+
         # Shape head
         logits = []
         for j in range(len(weights["b_shape"])):
-            val = sum(h3[i] * weights["w_shape"][i][j] for i in range(len(h3))) + weights["b_shape"][j]
+            val = sum(h_out[i] * weights["w_shape"][i][j] for i in range(len(h_out))) + weights["b_shape"][j]
             logits.append(val)
         max_l = max(logits)
         exp_l = [math.exp(l - max_l) for l in logits]
@@ -156,7 +173,8 @@ def run_inference(sensors):
         probs = [e / sum_exp for e in exp_l]
 
         # Dim head
-        dim_mm = sum(h3[i] * weights["w_dim"][i][0] for i in range(len(h3))) + weights["b_dim"][0]
+        dim_mm = sum(h_out[i] * weights["w_dim"][i][0] for i in range(len(h_out))) + weights["b_dim"][0]
+
 
     best_idx = max(range(len(probs)), key=lambda i: probs[i])
     shape_name = shape_classes[best_idx]

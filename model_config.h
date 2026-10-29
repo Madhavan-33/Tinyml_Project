@@ -1,6 +1,6 @@
 /*
  * Auto-Generated TinyML Model Configuration Header
- * Retrained on actual telemetry (S1-S9: 1.5V - 2.3V)
+ * 9-Sensor Tactile Mesh (S1-S9: 1.6V - 2.28V)
  * Target: STM32 / ARM Cortex-M Firmware
  */
 #ifndef MODEL_CONFIG_H
@@ -10,9 +10,9 @@
 #define NUM_OUTPUTS         3
 #define NUM_SHAPE_CLASSES   2
 
-/* Sensor Normalization Parameters (StandardScaler fit on telemetry data) */
-static const float INPUT_MEANS[9] = { 2.257294f, 2.031018f, 2.130260f, 2.239680f, 1.856868f, 2.228789f, 2.205536f, 2.185270f, 2.246056f };
-static const float INPUT_STDS[9]  = { 0.013106f, 0.148059f, 0.091816f, 0.033303f, 0.133878f, 0.047418f, 0.097651f, 0.087409f, 0.038911f };
+/* Sensor Normalization Parameters (StandardScaler fit on dataset) */
+static const float INPUT_MEANS[9] = { 2.070542f, 1.966373f, 2.070543f, 2.056118f, 1.939721f, 2.056036f, 2.070535f, 1.966333f, 2.070612f };
+static const float INPUT_STDS[9]  = { 0.108731f, 0.097390f, 0.108791f, 0.117959f, 0.105098f, 0.117977f, 0.108775f, 0.097378f, 0.108750f };
 
 /* Shape Class Labels */
 static const char* const SHAPE_CLASSES[2] = { "cube", "cylinder" };

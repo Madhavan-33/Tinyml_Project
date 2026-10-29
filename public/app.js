@@ -2,20 +2,20 @@
 let modelData = null;
 const NUM_SENSORS = 9;
 
-// Physical sensor operating range for the actual mesh telemetry system
-const SENSOR_MIN = 1.5;    // V
-const SENSOR_MAX = 2.3;    // V
-const SENSOR_DEFAULT = 2.25; // V (dataset mean)
+// Physical sensor operating range for the tactile mesh system
+const SENSOR_MIN = 1.60;    // V
+const SENSOR_MAX = 2.28;    // V
+const SENSOR_DEFAULT = 2.15; // V (dataset baseline)
 
 // Default initial telemetry (realistic in-range values)
-let sensorValues = [2.25, 2.20, 2.22, 2.18, 2.27, 2.21, 2.23, 2.19, 2.24];
+let sensorValues = [2.05, 1.95, 2.05, 2.00, 1.88, 2.00, 2.05, 1.95, 2.05];
 
-// Preset Scenarios (in-range: 1.5V - 2.3V)
+// Preset Scenarios (physical range: 1.60V - 2.28V)
 const PRESETS = {
-  beam:     [2.10, 2.05, 2.08, 2.15, 2.12, 2.09, 2.11, 2.07, 2.13],
-  cylinder: [2.20, 2.18, 2.22, 2.19, 2.23, 2.21, 2.17, 2.24, 2.20],
-  sphere:   [2.28, 2.25, 2.27, 2.29, 2.26, 2.28, 2.30, 2.27, 2.29],
-  anomaly:  [1.52, 1.55, 1.51, 2.28, 2.29, 1.53, 1.57, 2.27, 2.28]
+  cube:          [2.00, 1.96, 2.01, 1.95, 1.88, 1.97, 2.02, 1.98, 2.01],
+  cylinder:      [2.22, 1.88, 2.23, 2.21, 1.82, 2.22, 2.23, 1.89, 2.21],
+  high_pressure: [1.75, 1.70, 1.75, 1.68, 1.62, 1.69, 1.74, 1.71, 1.75],
+  light_touch:   [2.25, 2.22, 2.25, 2.24, 2.20, 2.24, 2.25, 2.22, 2.26]
 };
 
 // Initialize Application
@@ -103,7 +103,7 @@ function evaluatePrediction() {
 
   const meta = modelData.metadata;
   const weights = modelData.weights;
-  const classes = meta.shape_classes;
+  const classes = meta.shape_classes || ["cube", "cylinder"];
 
   // 1. Normalize via StandardScaler (z-score)
   const x_scaled = sensorValues.map((v, i) => (v - meta.sensor_means[i]) / meta.sensor_stds[i]);
@@ -132,7 +132,7 @@ function evaluatePrediction() {
     h2_pre.push(Math.max(0, sum));
   }
 
-  // 5. BatchNorm 2 (if present in retrained model)
+  // 5. BatchNorm 2
   let h2 = h2_pre;
   if (weights.bn2_gamma) {
     h2 = [];
@@ -151,11 +151,22 @@ function evaluatePrediction() {
     h3.push(Math.max(0, sum));
   }
 
-  // 7. Shape Head (Softmax)
+  // 7. Optional Dense 4 + ReLU
+  let h_last = h3;
+  if (weights.w4) {
+    h_last = [];
+    for (let j = 0; j < weights.b4.length; j++) {
+      let sum = weights.b4[j];
+      for (let i = 0; i < h3.length; i++) sum += h3[i] * weights.w4[i][j];
+      h_last.push(Math.max(0, sum));
+    }
+  }
+
+  // 8. Shape Head (Softmax)
   const logits = [];
   for (let j = 0; j < weights.b_shape.length; j++) {
     let sum = weights.b_shape[j];
-    for (let i = 0; i < h3.length; i++) sum += h3[i] * weights.w_shape[i][j];
+    for (let i = 0; i < h_last.length; i++) sum += h_last[i] * weights.w_shape[i][j];
     logits.push(sum);
   }
   const maxL = Math.max(...logits);
@@ -163,9 +174,9 @@ function evaluatePrediction() {
   const sumExp = expL.reduce((a, b) => a + b, 0);
   const probs = expL.map(e => e / sumExp);
 
-  // 8. Dimension Head (Linear)
+  // 9. Dimension Head (Linear)
   let dim_mm = weights.b_dim[0];
-  for (let i = 0; i < h3.length; i++) dim_mm += h3[i] * weights.w_dim[i][0];
+  for (let i = 0; i < h_last.length; i++) dim_mm += h_last[i] * weights.w_dim[i][0];
 
   // Render results
   let bestIdx = 0;
@@ -173,39 +184,46 @@ function evaluatePrediction() {
     if (probs[i] > probs[bestIdx]) bestIdx = i;
   }
 
+  const probObj = {};
+  classes.forEach((c, idx) => {
+    probObj[c] = probs[idx];
+  });
+
   renderResultsUI({
     predicted_shape: classes[bestIdx],
     confidence_percentage: (probs[bestIdx] * 100).toFixed(1),
     estimated_dimension_mm: Math.max(1.0, dim_mm).toFixed(2),
-    probabilities: {
-      Beam: probs[classes.indexOf("Beam")] || 0,
-      Cylinder: probs[classes.indexOf("Cylinder")] || 0,
-      Sphere: probs[classes.indexOf("Sphere")] || 0
-    },
-    mode: "Client WebAssembly / JS Engine (<1ms)"
+    probabilities: probObj,
+    mode: "Client TinyML Engine (<1ms)"
   });
 }
 
 // Update UI Components
 function renderResultsUI(data) {
-  document.getElementById("resShape").textContent = data.predicted_shape.toUpperCase();
-  document.getElementById("resConfidence").textContent = `Confidence: ${data.confidence_percentage}%`;
-  document.getElementById("resSize").textContent = `${data.estimated_dimension_mm} mm`;
-  document.getElementById("resLatency").textContent = data.mode || "< 5 ms";
+  const shapeEl = document.getElementById("resShape");
+  const confEl = document.getElementById("resConfidence");
+  const sizeEl = document.getElementById("resSize");
+  const latEl = document.getElementById("resLatency");
 
-  // Progress Bars
-  const pBeam = (data.probabilities.Beam * 100).toFixed(1);
-  const pCylinder = (data.probabilities.Cylinder * 100).toFixed(1);
-  const pSphere = (data.probabilities.Sphere * 100).toFixed(1);
+  if (shapeEl) shapeEl.textContent = (data.predicted_shape || "CUBE").toUpperCase();
+  if (confEl) confEl.textContent = `Confidence: ${data.confidence_percentage}%`;
+  if (sizeEl) sizeEl.textContent = `${data.estimated_dimension_mm} mm`;
+  if (latEl) latEl.textContent = data.mode || "< 1 ms";
 
-  document.getElementById("barBeam").style.width = `${pBeam}%`;
-  document.getElementById("pctBeam").textContent = `${pBeam}%`;
+  // Handle probabilities
+  const probs = data.shape_probabilities || data.probabilities || {};
+  const pCube = (probs.cube !== undefined) ? (probs.cube * 100).toFixed(1) : ((probs.Cube !== undefined) ? (probs.Cube * 100).toFixed(1) : "100.0");
+  const pCyl = (probs.cylinder !== undefined) ? (probs.cylinder * 100).toFixed(1) : ((probs.Cylinder !== undefined) ? (probs.Cylinder * 100).toFixed(1) : "0.0");
 
-  document.getElementById("barCylinder").style.width = `${pCylinder}%`;
-  document.getElementById("pctCylinder").textContent = `${pCylinder}%`;
+  const barCube = document.getElementById("barCube");
+  const pctCube = document.getElementById("pctCube");
+  if (barCube) barCube.style.width = `${pCube}%`;
+  if (pctCube) pctCube.textContent = `${pCube}%`;
 
-  document.getElementById("barSphere").style.width = `${pSphere}%`;
-  document.getElementById("pctSphere").textContent = `${pSphere}%`;
+  const barCylinder = document.getElementById("barCylinder");
+  const pctCylinder = document.getElementById("pctCylinder");
+  if (barCylinder) barCylinder.style.width = `${pCyl}%`;
+  if (pctCylinder) pctCylinder.textContent = `${pCyl}%`;
 }
 
 // Canvas Waveform / Radar Visualizer

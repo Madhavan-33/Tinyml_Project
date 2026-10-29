@@ -47,10 +47,10 @@
 
       <!-- Quick Preset Buttons -->
       <div class="presets-bar" role="group" aria-label="Sensor Presets">
-        <button type="button" class="preset-chip" data-preset="beam" id="presetBeam">Beam Profile</button>
+        <button type="button" class="preset-chip" data-preset="cube" id="presetCube">Cube Profile</button>
         <button type="button" class="preset-chip" data-preset="cylinder" id="presetCylinder">Cylinder Profile</button>
-        <button type="button" class="preset-chip" data-preset="sphere" id="presetSphere">Sphere Profile</button>
-        <button type="button" class="preset-chip" data-preset="anomaly" id="presetAnomaly">Edge Anomaly</button>
+        <button type="button" class="preset-chip" data-preset="high_pressure" id="presetHighPress">High Pressure</button>
+        <button type="button" class="preset-chip" data-preset="light_touch" id="presetLightTouch">Light Touch</button>
       </div>
 
       <!-- 9 Dynamic Sliders List -->
@@ -63,20 +63,20 @@
     <section class="glass-panel" aria-labelledby="analyticsHeading">
       <div class="panel-header">
         <h2 id="analyticsHeading">🎯 Predicted Object & Size Output</h2>
-        <span class="status-badge" id="resLatency">&lt; 5 ms Latency</span>
+        <span class="status-badge" id="resLatency">&lt; 1 ms Latency</span>
       </div>
 
       <!-- KPI Highlight Cards -->
       <div class="kpi-grid">
         <div class="kpi-card kpi-shape" id="cardShape">
           <div class="kpi-label">Identified Object</div>
-          <div class="kpi-value" id="resShape">BEAM</div>
-          <div class="kpi-subtext" id="resConfidence">Confidence: 94.8%</div>
+          <div class="kpi-value" id="resShape">CUBE</div>
+          <div class="kpi-subtext" id="resConfidence">Confidence: 100.0%</div>
         </div>
 
         <div class="kpi-card kpi-size" id="cardSize">
           <div class="kpi-label">Estimated Dimension</div>
-          <div class="kpi-value" id="resSize">24.11 mm</div>
+          <div class="kpi-value" id="resSize">35.00 mm</div>
           <div class="kpi-subtext">Continuous Sizing (dim_mm)</div>
         </div>
       </div>
@@ -98,31 +98,21 @@
 
         <div class="prob-row">
           <div class="prob-labels">
-            <span>Beam (Linear Bar)</span>
-            <span id="pctBeam" style="font-family:var(--font-mono); font-weight:600;">94.8%</span>
+            <span>Cube (Planar 2D Press)</span>
+            <span id="pctCube" style="font-family:var(--font-mono); font-weight:600;">100.0%</span>
           </div>
           <div class="prob-bar-container">
-            <div class="prob-bar-fill bar-beam" id="barBeam" style="width: 94.8%;"></div>
+            <div class="prob-bar-fill bar-cube" id="barCube" style="width: 100.0%;"></div>
           </div>
         </div>
 
         <div class="prob-row">
           <div class="prob-labels">
-            <span>Cylinder (Radial Profile)</span>
-            <span id="pctCylinder" style="font-family:var(--font-mono); font-weight:600;">3.1%</span>
+            <span>Cylinder (Axial Contact Ridge)</span>
+            <span id="pctCylinder" style="font-family:var(--font-mono); font-weight:600;">0.0%</span>
           </div>
           <div class="prob-bar-container">
-            <div class="prob-bar-fill bar-cylinder" id="barCylinder" style="width: 3.1%;"></div>
-          </div>
-        </div>
-
-        <div class="prob-row">
-          <div class="prob-labels">
-            <span>Sphere (Curvature)</span>
-            <span id="pctSphere" style="font-family:var(--font-mono); font-weight:600;">2.1%</span>
-          </div>
-          <div class="prob-bar-container">
-            <div class="prob-bar-fill bar-sphere" id="barSphere" style="width: 2.1%;"></div>
+            <div class="prob-bar-fill bar-cylinder" id="barCylinder" style="width: 0.0%;"></div>
           </div>
         </div>
       </div>

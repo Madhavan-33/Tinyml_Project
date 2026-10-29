@@ -1,17 +1,17 @@
 """
-Retrain TinyML Multi-Task Neural Network on Actual Telemetry Dataset
-====================================================================
-Trains on the real 9-sensor telemetry CSV (S1-S9 range: ~1.5V to 2.3V).
+Retrain TinyML Multi-Task Neural Network on 9-Sensor Tactile Mesh Dataset
+========================================================================
+Trains on the 9-sensor mesh dataset (S1-S9 physical range: 1.60V to 2.28V).
 Exports:
   - anomaly_model.tflite       (TFLite for edge inference)
-  - model_metadata.pkl         (scaler + encoder)
+  - model_metadata.pkl         (scaler + encoder + stats)
   - model_weights.json         (weights for JS/serverless inference)
   - api/model_weights.json     (Vercel API copy)
   - public/model_weights.json  (browser-side JS copy)
   - model_config.h             (C header for STM32/Arduino firmware)
+  - model_data.h               (C byte array for TFLM micro firmware)
 
 Usage:
-  python retrain_on_telemetry.py --dataset all_runs_n10-n19_SS960_ipc.csv
   python retrain_on_telemetry.py --dataset sensor_design_dataset.csv
 """
 
@@ -35,10 +35,10 @@ from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.metrics import accuracy_score, mean_absolute_error, r2_score, confusion_matrix
 from convert_model import convert_tflite_to_c_header
 
-# ── Physical sensor operating range (actual mesh telemetry hardware) ──────────
-SENSOR_PHYSICAL_MIN = 1.5   # V
-SENSOR_PHYSICAL_MAX = 2.3   # V
-SENSOR_PHYSICAL_MEAN = 2.20  # V  (approximate mean per dataset stats)
+# ── Physical sensor operating range ─────────────────────────
+SENSOR_PHYSICAL_MIN = 1.60   # V
+SENSOR_PHYSICAL_MAX = 2.28   # V
+SENSOR_PHYSICAL_MEAN = 2.15  # V
 
 SENSOR_COLS_PATTERN = re.compile(r'^s[1-9]$', re.IGNORECASE)
 EXPECTED_SENSOR_COUNT = 9
@@ -108,7 +108,7 @@ def generate_c_header(cols_s, shape_classes, sensor_means, sensor_stds,
     class_names_str = ", ".join([f'"{c}"' for c in shape_classes])
     content = f"""/*
  * Auto-Generated TinyML Model Configuration Header
- * Retrained on actual telemetry (S1-S9: {SENSOR_PHYSICAL_MIN}V - {SENSOR_PHYSICAL_MAX}V)
+ * 9-Sensor Tactile Mesh (S1-S9: {SENSOR_PHYSICAL_MIN}V - {SENSOR_PHYSICAL_MAX}V)
  * Target: STM32 / ARM Cortex-M Firmware
  */
 #ifndef MODEL_CONFIG_H
@@ -118,7 +118,7 @@ def generate_c_header(cols_s, shape_classes, sensor_means, sensor_stds,
 #define NUM_OUTPUTS         {num_outputs}
 #define NUM_SHAPE_CLASSES   {num_classes}
 
-/* Sensor Normalization Parameters (StandardScaler fit on telemetry data) */
+/* Sensor Normalization Parameters (StandardScaler fit on dataset) */
 static const float INPUT_MEANS[{num_inputs}] = {{ {in_means_str} }};
 static const float INPUT_STDS[{num_inputs}]  = {{ {in_stds_str} }};
 
@@ -143,16 +143,13 @@ def build_dual_head_model(num_classes):
 
     inp = layers.Input(shape=(9,), name='sensor_inputs')
 
-    # Backbone: 9 -> 128 -> BN -> Drop -> 64 -> BN -> Drop -> 32
+    # Backbone: 9 -> 128 -> BN -> 128 -> BN -> 64 -> 32
     x = layers.Dense(128, activation='relu', name='dense_1')(inp)
     x = layers.BatchNormalization(name='bn_1')(x)
-    x = layers.Dropout(0.15)(x)
-
-    x = layers.Dense(64, activation='relu', name='dense_2')(x)
+    x = layers.Dense(128, activation='relu', name='dense_2')(x)
     x = layers.BatchNormalization(name='bn_2')(x)
-    x = layers.Dropout(0.10)(x)
-
-    x = layers.Dense(32, activation='relu', name='dense_3')(x)
+    x = layers.Dense(64, activation='relu', name='dense_3')(x)
+    x = layers.Dense(32, activation='relu', name='dense_4')(x)
 
     shape_out = layers.Dense(num_classes, activation='softmax', name='shape_output')(x)
     dim_out = layers.Dense(1, activation='linear', name='dim_output')(x)
@@ -161,17 +158,17 @@ def build_dual_head_model(num_classes):
     return model, shape_out, dim_out
 
 
-def train(dataset_file, epochs=100, batch_size=32, lr=0.001,
+def train(dataset_file, epochs=50, batch_size=32, lr=0.002,
           max_samples=None, verbose=1):
     print(f"\n{'='*60}")
-    print(f"  TinyML 9-Sensor Telemetry Retraining Pipeline")
+    print(f"  TinyML 9-Sensor Multi-Task Retraining Pipeline")
     print(f"{'='*60}")
     print(f"Dataset : {dataset_file}")
     print(f"Epochs  : {epochs}  |  Batch: {batch_size}  |  LR: {lr}")
 
     # 1. Load dataset
     df = load_dataset(dataset_file)
-    print(f"\nLoaded {len(df):,} rows x {len(df.columns)} cols")
+    print(f"Loaded {len(df):,} rows x {len(df.columns)} cols")
 
     cols_s = find_sensor_columns(df)
     shape_col, dim_col = find_target_columns(df)
@@ -187,16 +184,10 @@ def train(dataset_file, epochs=100, batch_size=32, lr=0.001,
 
     # 2. Sensor statistics
     X_raw = df_clean[cols_s].values.astype(np.float32)
-    print(f"\nSensor voltage ranges:")
-    for i, col in enumerate(cols_s):
-        print(f"  {col}: min={X_raw[:,i].min():.4f}V  "
-              f"max={X_raw[:,i].max():.4f}V  "
-              f"mean={X_raw[:,i].mean():.4f}V")
-
     overall_min = float(X_raw.min())
     overall_max = float(X_raw.max())
     overall_mean = float(X_raw.mean())
-    print(f"  Overall: min={overall_min:.4f}  max={overall_max:.4f}  mean={overall_mean:.4f}")
+    print(f"Sensor overall: min={overall_min:.4f}V, max={overall_max:.4f}V, mean={overall_mean:.4f}V")
 
     # 3. Preprocessing
     scaler_sensors = StandardScaler()
@@ -207,10 +198,8 @@ def train(dataset_file, epochs=100, batch_size=32, lr=0.001,
     num_classes = len(shape_encoder.classes_)
     y_dim = df_clean[dim_col].values.astype(np.float32)
 
-    print(f"\nClasses ({num_classes}): {list(shape_encoder.classes_)}")
-    print(f"Dim: {y_dim.min():.1f}mm to {y_dim.max():.1f}mm (mean {y_dim.mean():.1f}mm)")
-    print(f"Scaler means: {[round(float(v),4) for v in scaler_sensors.mean_]}")
-    print(f"Scaler stds:  {[round(float(v),4) for v in np.sqrt(scaler_sensors.var_)]}")
+    print(f"Classes ({num_classes}): {list(shape_encoder.classes_)}")
+    print(f"Dimension Range: {y_dim.min():.1f}mm to {y_dim.max():.1f}mm (mean {y_dim.mean():.1f}mm)")
 
     # 4. Build and train
     training_model, shape_out, dim_out = build_dual_head_model(num_classes)
@@ -221,19 +210,12 @@ def train(dataset_file, epochs=100, batch_size=32, lr=0.001,
         metrics={'shape_output': ['accuracy'], 'dim_output': ['mae']}
     )
 
-    callbacks = [
-        tf.keras.callbacks.EarlyStopping(
-            monitor='val_shape_output_accuracy',
-            patience=15, restore_best_weights=True, mode='max', verbose=1),
-        tf.keras.callbacks.ReduceLROnPlateau(
-            monitor='val_loss', factor=0.5, patience=8, min_lr=1e-5, verbose=1)
-    ]
-
-    print(f"\nTraining on {len(X_scaled):,} samples...")
+    print(f"\nTraining model across {len(X_scaled):,} samples...")
     training_model.fit(
         X_scaled, [y_shape, y_dim],
-        validation_split=0.15, epochs=epochs,
-        batch_size=batch_size, callbacks=callbacks, verbose=verbose
+        epochs=epochs,
+        batch_size=batch_size,
+        verbose=verbose
     )
 
     # 5. Evaluate
@@ -248,9 +230,10 @@ def train(dataset_file, epochs=100, batch_size=32, lr=0.001,
     acc = accuracy_score(y_shape, pred_shape_idx)
     mae = mean_absolute_error(y_dim, pred_dims)
     r2 = r2_score(y_dim, pred_dims)
+    mismatches = int((y_shape != pred_shape_idx).sum())
 
     print(f"\n{'─'*50}")
-    print(f"  Shape Accuracy  : {acc*100.0:.2f}%")
+    print(f"  Shape Accuracy  : {acc*100.0:.2f}% (Matches: {len(df_clean) - mismatches}/{len(df_clean)}, Mismatches: {mismatches})")
     print(f"  Size MAE        : {mae:.3f} mm")
     print(f"  Size R2         : {r2:.4f}")
     print(f"{'─'*50}")
@@ -258,18 +241,14 @@ def train(dataset_file, epochs=100, batch_size=32, lr=0.001,
     cm = confusion_matrix(y_shape, pred_shape_idx)
     print(f"\nConfusion Matrix ({list(shape_encoder.classes_)}):")
     print(cm)
-    for ci, cn in enumerate(shape_encoder.classes_):
-        mask = (y_shape == ci)
-        cls_acc = accuracy_score(y_shape[mask], pred_shape_idx[mask])
-        cls_conf = np.mean(pred_shape_probs[mask, ci]) * 100
-        print(f"  {cn:12s}: Acc={cls_acc*100:.1f}%  AvgConf={cls_conf:.1f}%")
 
-    # 6. Extract weights
+    # 6. Extract weights for JS / Serverless
     d1 = training_model.get_layer('dense_1')
     bn1 = training_model.get_layer('bn_1')
     d2 = training_model.get_layer('dense_2')
     bn2_l = training_model.get_layer('bn_2')
     d3 = training_model.get_layer('dense_3')
+    d4 = training_model.get_layer('dense_4')
     hs = training_model.get_layer('shape_output')
     hd = training_model.get_layer('dim_output')
 
@@ -282,30 +261,31 @@ def train(dataset_file, epochs=100, batch_size=32, lr=0.001,
     e2 = float(bn2_l.epsilon)
 
     w3, b3 = d3.get_weights()
+    w4, b4 = d4.get_weights()
     ws, bs = hs.get_weights()
     wd, bd = hd.get_weights()
 
-    # 7. Validate NumPy forward-pass
+    # Validate forward pass in NumPy
     def np_predict(X):
         h1 = np.maximum(0, np.dot(X, w1) + b1)
         h1b = g1 * (h1 - m1) / np.sqrt(v1 + e1) + be1
         h2 = np.maximum(0, np.dot(h1b, w2) + b2)
         h2b = g2 * (h2 - m2) / np.sqrt(v2 + e2) + be2
         h3 = np.maximum(0, np.dot(h2b, w3) + b3)
-        logits = np.dot(h3, ws) + bs
+        h4 = np.maximum(0, np.dot(h3, w4) + b4)
+        logits = np.dot(h4, ws) + bs
         e = np.exp(logits - np.max(logits, axis=-1, keepdims=True))
         probs = e / np.sum(e, axis=-1, keepdims=True)
-        dim = np.dot(h3, wd) + bd
+        dim = np.dot(h4, wd) + bd
         return np.concatenate([probs, dim], axis=-1)
 
     n_check = min(200, len(X_scaled))
     pf = np_predict(X_scaled[:n_check])
     diff = float(np.max(np.abs(preds_all[:n_check] - pf)))
-    print(f"\nNumPy vs Keras validation diff: {diff:.2e}")
     assert diff < 1e-3, f"Forward-pass mismatch too large: {diff}"
-    print("  Weights validated OK.")
+    print(f"NumPy vs Keras forward pass difference: {diff:.2e} (Validated OK)")
 
-    # 8. Save metadata
+    # 7. Save metadata
     sensor_means_list = scaler_sensors.mean_.tolist()
     sensor_stds_list = np.sqrt(scaler_sensors.var_).tolist()
 
@@ -334,7 +314,7 @@ def train(dataset_file, epochs=100, batch_size=32, lr=0.001,
     joblib.dump(metadata, 'model_metadata.pkl')
     print("Saved model_metadata.pkl")
 
-    # 9. Export TFLite
+    # 8. Export TFLite
     converter = tf.lite.TFLiteConverter.from_keras_model(export_model)
     converter.optimizations = [tf.lite.Optimize.DEFAULT]
     tflite_bytes = converter.convert()
@@ -342,19 +322,19 @@ def train(dataset_file, epochs=100, batch_size=32, lr=0.001,
         f.write(tflite_bytes)
     print(f"Saved anomaly_model.tflite ({len(tflite_bytes):,} bytes)")
 
-    # 10. Generate C header
+    # 9. Generate C header
     generate_c_header(cols_s, list(shape_encoder.classes_),
                       sensor_means_list, sensor_stds_list, "model_config.h")
     print("Saved model_config.h")
 
-    # 11. model_data.h
+    # 10. Generate model_data.h
     try:
         convert_tflite_to_c_header("anomaly_model.tflite", "model_data.h")
         print("Saved model_data.h")
     except Exception as ex:
         print(f"model_data.h skipped: {ex}")
 
-    # 12. model_weights.json (browser + API)
+    # 11. Save weights for Vercel Serverless & Client-side JS
     vercel_payload = {
         "metadata": {
             "num_inputs": 9,
@@ -376,6 +356,7 @@ def train(dataset_file, epochs=100, batch_size=32, lr=0.001,
             "bn2_gamma": g2.tolist(), "bn2_beta": be2.tolist(),
             "bn2_mean": m2.tolist(), "bn2_var": v2.tolist(), "bn2_eps": e2,
             "w3": w3.tolist(), "b3": b3.tolist(),
+            "w4": w4.tolist(), "b4": b4.tolist(),
             "w_shape": ws.tolist(), "b_shape": bs.tolist(),
             "w_dim": wd.tolist(), "b_dim": bd.tolist()
         }
@@ -388,24 +369,24 @@ def train(dataset_file, epochs=100, batch_size=32, lr=0.001,
             json.dump(vercel_payload, f)
         print(f"Saved {tgt} ({os.path.getsize(tgt)/1024:.1f} KB)")
 
-    print(f"\nALL ARTIFACTS EXPORTED. Accuracy={acc*100:.2f}%  MAE={mae:.2f}mm  R2={r2:.4f}")
+    print(f"\n✅ RETRAINING & EXPORT COMPLETE!")
+    print(f"Accuracy: {acc*100.0:.2f}% | MAE: {mae:.2f}mm | Mismatches: {mismatches}")
     return metadata
 
 
 if __name__ == '__main__':
-    p = argparse.ArgumentParser(description='Retrain TinyML on actual sensor telemetry.')
-    p.add_argument('--dataset', default='all_runs_n10-n19_SS960_ipc.csv')
-    p.add_argument('--epochs', type=int, default=100)
+    p = argparse.ArgumentParser(description='Retrain TinyML model on sensor dataset.')
+    p.add_argument('--dataset', default='sensor_design_dataset.csv')
+    p.add_argument('--epochs', type=int, default=50)
     p.add_argument('--batch_size', type=int, default=32)
-    p.add_argument('--lr', type=float, default=0.001)
+    p.add_argument('--lr', type=float, default=0.002)
     p.add_argument('--max_samples', type=int, default=None)
     args = p.parse_args()
 
     dataset_file = args.dataset
     if not os.path.exists(dataset_file):
-        fallback = 'sensor_design_dataset.csv'
-        print(f"WARNING: '{dataset_file}' not found. Falling back to '{fallback}'")
-        dataset_file = fallback
+        from dataset_generator import generate_sensor_design_dataset
+        generate_sensor_design_dataset(dataset_file)
 
     train(dataset_file, epochs=args.epochs, batch_size=args.batch_size,
           lr=args.lr, max_samples=args.max_samples)

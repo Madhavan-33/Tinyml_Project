@@ -18,7 +18,7 @@ except Exception:
 
 def train_and_export_default(dataset_file=None):
     if dataset_file is None:
-        dataset_file = "all_runs_n10-n19_SS960_ipc.csv" if os.path.exists("all_runs_n10-n19_SS960_ipc.csv") else "sensor_design_dataset.csv"
+        dataset_file = "sensor_design_dataset.csv" if os.path.exists("sensor_design_dataset.csv") else ("all_runs_n10-n19_SS960_ipc.csv" if os.path.exists("all_runs_n10-n19_SS960_ipc.csv") else "sensor_design_dataset.csv")
     if not os.path.exists(dataset_file):
         from dataset_generator import generate_sensor_design_dataset
         generate_sensor_design_dataset(dataset_file)
